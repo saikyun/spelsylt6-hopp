@@ -30,7 +30,6 @@
 (def [map-w map-h] (get-image-dimensions im-map))
 
 (defonce bill (load-texture "resources/halm.png"))
-(def bill-pos @[0 0.2 0])
 
 (defonce bullet (load-texture "resources/bullet.png"))
 
@@ -38,6 +37,12 @@
 (var rt (load-render-texture 0 0))
 
 (def bullets @[])
+(def enemies @[])
+
+(array/push enemies @{:pos @[0 0.2 0]
+                      :radius 0.5
+                      :blink 0})
+
 
 (import ../freja/freja/vector-math :prefix "")
 (import ./coll :prefix "")
@@ -46,12 +51,28 @@
 (var last-player-pos (get-camera-position c))
 (varonce last-coll nil)
 
+(def debug-logs @[])
+
+(defn log
+  [& args]
+  (array/push debug-logs (string/format
+                           (string/join
+                             (seq [i :range [0 (length args)]]
+                               "%p")
+                             " ")
+                           ;args)))
+
 (defn cam-rot
   [c]
   (normalize
     (v-
       (get-camera-target c)
       (get-camera-position c))))
+
+(defn ->map-pos
+  [map-w map-h px py]
+  [(+ px (* 0.5 map-w))
+   (+ py (* 0.5 map-h))])
 
 (defn tick
   [el]
@@ -68,55 +89,16 @@
       (update-in b [:pos 1] - 0.01)
       (array/push bullets b)))
 
-  (def cell-x (math/round (- x (map-pos 0))))
-  (def cell-y (math/round (- y (map-pos 2)))))
+  (var i 0)
 
-(defn render
-  [el]
-  (def {:width mw
-        :height mh} el)
+  (while (< i (length bullets))
 
-  (when (el :focused?)
-    (update-camera c))
+    (if ((in bullets i) :dead)
+      (array/remove bullets i)
+      (++ i))))
 
-  (clear-background :white)
-
-  (tick el)
-
-  (draw-rectangle-rec [0 0 33 10] :gray)
-
-  (def bill-pos-2d [(- (get-in bill-pos [0]))
-                    (- (get-in bill-pos [2]))])
-
-  (def size 0.1)
-  (def scale 10)
-
-  (defer (end-mode-3d)
-    (begin-mode-3d c)
-
-    (draw-model model map-pos 1 :white)
-
-    (var coll false)
-
-    (loop [b :in bullets
-           :let [b-pos [(- (get-in b [:pos 0]))
-                        (- (get-in b [:pos 2]))]]]
-
-      (when (circle-circle? b-pos size bill-pos-2d size)
-        (set coll true)))
-
-    (draw-billboard c bill bill-pos 0.5 (if coll :red :white))
-
-    (loop [b :in bullets
-           :let [{:pos pos
-                  :sprite sprite
-                  :dir dir
-                  :speed speed} b]]
-
-      (update b :pos v+ (v* dir speed))
-
-      (draw-billboard c sprite pos 0.1 :white)))
-
+(defn handle-map-collisions
+  []
   (let [scale 10
         player-pos (get-camera-position c)
         [px py pz] player-pos]
@@ -139,62 +121,191 @@
                       scale
                       :red))
 
+    (var nof-hits 0)
+
     (loop [x :range [0 map-w]
            y :range [0 map-h]
            :when (and (= [1 1 1 1]
                          (map-pixels (+ (* y map-w)
-                                        x)))
+                                        x))))
+           :let [tile-rec [x y 1 1]]]
 
-                      (check-collision-circle-rec
-                        (do tracev [(+ px (* 0.5 map-w) -0.0)
-                                    (+ pz (* 0.5 map-h) -0.0)])
+      (let [bullet-size 0.1]
+        (loop [b :in bullets
+               :let [{:pos pos} b
+                     [bx by bz] pos]
+               :when (check-collision-circle-rec
+                       (->map-pos map-w map-h bx bz)
+                       bullet-size
 
-                        0.25
+                       tile-rec)]
+          (put b :dead true)))
 
-                        (do tracev [x
-                                    y
-                                    1
-                                    1])))]
+      (when (check-collision-circle-rec
+              (->map-pos map-w map-h px pz)
 
-      (set-camera-position c last-player-pos)
-      (set last-coll [[(+ px (* 0.5 map-w) -0.0)
-                       (+ pz (* 0.5 map-h) -0.0)]
-                      [x
-                       y
-                       1
-                       1]])
+              0.25
 
-      (draw-rectangle (* scale x)
-                      (* scale y)
-                      scale
-                      scale
-                      :green))
+              tile-rec)
 
-    (set last-player-pos (get-camera-position c)))
+        #(set-camera-position c last-player-pos)
+        (set last-coll [[(+ px (* 0.5 map-w) -0.0)
+                         (+ pz (* 0.5 map-h) -0.0)]
+                        [x
+                         y
+                         1
+                         1]])
+
+        (++ nof-hits)
+
+        (let [[p wall] last-coll]
+          (def angle (v- p wall))
+
+          (def x-diff (- (+ 0.5 0.25) (math/abs (- (p 0) (wall 0)))))
+
+          (def x-diff
+            (if (neg? (angle 0))
+              (- x-diff)
+              x-diff))
+
+          (def z-diff (- (+ 0.5 0.25) (math/abs (- (p 1) (wall 1)))))
+
+          (def z-diff
+            (if (pos? (angle 1))
+              (- z-diff)
+              z-diff))
+
+          (if (> (math/abs (angle 0))
+                 (math/abs (angle 1)))
+            # "left"
+            (do (print "left")
+              (set-camera-position c [(+ px x-diff) py pz]))
+            # "up"
+            (set-camera-position c [px py (- pz z-diff)])))
+
+        (draw-rectangle (* scale x)
+                        (* scale y)
+                        scale
+                        scale
+                        :green)))
+
+    (when (< 2 nof-hits)
+      (set-camera-position c last-player-pos))
+
+    (set last-player-pos (get-camera-position c))))
+
+(defn render
+  [el]
+  (def {:width mw
+        :height mh} el)
+
+  (when (el :focused?)
+    (update-camera c))
+
+  (clear-background :white)
+
+  (tick el)
+
+  (draw-rectangle-rec [0 0 33 10] :gray)
+
+  (def size 0.1)
+  (def scale 10)
+
+  (defer (end-mode-3d)
+    (begin-mode-3d c)
+
+    (draw-model model map-pos 1 :white)
+
+    (var coll false)
+
+    (loop [b :in bullets
+           :let [b-pos [(- (get-in b [:pos 0]))
+                        (- (get-in b [:pos 2]))]]]
+      (loop [e :in enemies
+             :let [{:pos pos
+                    :radius e-radius} e
+                   [ex ey ez] pos
+                   e-pos [ex ez]]]
+
+        (when (circle-circle? e-pos
+                              e-radius
+                              b-pos
+                              size)
+          (put e :hit 20)
+          (put e :blink-timer 5)
+          (put b :dead true))))
+
+    (loop [e :in enemies
+           :let [{:pos pos
+                  :hit hit
+                  :blink blink} e]]
+      (if-not (-?> hit pos?)
+        (do
+          (put e :blink nil)
+          (put e :hit nil))
+        (do
+          (update e :blink-timer dec)
+
+          (when (neg? (e :blink-timer))
+            (update e :blink not)
+            (put e :blink-timer 5))
+
+          (update e :hit dec)))
+      (draw-billboard c bill pos 0.5 (if blink
+
+                                       :red
+                                       :white)))
+
+    (loop [b :in bullets
+           :let [{:pos pos
+                  :sprite sprite
+                  :dir dir
+                  :speed speed} b]]
+
+      (update b :pos v+ (v* dir speed))
+
+      (draw-billboard c sprite pos 0.1 :white)))
+
+  (handle-map-collisions)
+
+  (draw-rectangle (dec (* 0.5 mw))
+                  (dec (* 0.5 mh))
+                  3
+                  3
+                  [0 0 0 0.8])
+
+  (draw-rectangle (* 0.5 mw)
+                  (* 0.5 mh)
+                  1
+                  1
+                  [1 1 1 0.8])
 
   (draw-fps 600 0)
 
-  (when-let [[p wall] last-coll]
+  (unless (empty? debug-logs)
+    (let [y-offset 180
+          size 16
+          line-h 1.5
+          h (math/floor (* line-h size))
 
-    (def angle (v- p wall))
+          w (reduce (fn [big dl]
+                      (max big (fj/measure-text dl size)))
+                    0
+                    debug-logs)]
 
-    (draw-rectangle 0 90 300 140 0x000000dd)
+      (draw-rectangle 0
+                      (- y-offset 10)
+                      (+ 20 w)
+                      (+ 20 (* (length debug-logs) h))
+                      0x000000dd)
 
-    (fj/draw-text (string/format "player %p" p) 0 100 22 :green)
-    (fj/draw-text (string/format "wall %p" wall) 0 130 22 :green)
-    (fj/draw-text (string/format "angle %p" angle) 0 160 22 :blue)
-    (fj/draw-text (string/format "angle %p" (if (> (angle 0)
-                                                   (angle 1))
-                                              "left"
-                                              "up")) 0 190 22 :blue))
+      (var y 0)
+      (loop [dl :in debug-logs]
+        (fj/draw-text dl 10 (+ y y-offset) size :green)
+        (+= y h))))
 
-  (comment
-    (fj/draw-text (string/format "pos %p" (get-camera-position c)) 0 100 22 :green)
-    (fj/draw-text (string/format "%p" (get-camera-target c)) 0 130 22 :green)
-    (fj/draw-text (string/format "%p" (v- (get-camera-position c) (get-camera-target c)))
-                  0 160 22 :blue)
-    #
-)
+  (array/clear debug-logs)
+
   #
 )
 
