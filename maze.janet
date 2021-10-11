@@ -110,6 +110,7 @@
 (def enemies @[])
 
 (def player @{:pos (get-camera-position c)
+              :last-pos (get-camera-position c)
               :radius 0.5
               :hp 38})
 
@@ -195,8 +196,6 @@
                       :blink 0
                       :update aggressive-melee-npc})
 
-
-(var last-player-pos (get-camera-position c))
 (varonce last-coll nil)
 
 (defn cam-rot
@@ -237,13 +236,46 @@
       (++ i) ##1 # (array/remove bullets i)
       (++ i))))
 
+(defn handle-wall-coll
+  [o o-rec wall]
+  (when (check-collision-circle-rec
+          o-rec
+          0.25
+          wall)
+
+    (update o :collision/nof-hits inc)
+
+    (let [[ox oy oz] (in o :pos)]
+      (def angle (v- o-rec wall))
+
+      (def x-diff (- (+ 0.5 0.25) (math/abs (- (o-rec 0) (wall 0)))))
+
+      (def x-diff
+        (if (neg? (angle 0))
+          (- x-diff)
+          x-diff))
+
+      (def z-diff (- (+ 0.5 0.25) (math/abs (- (o-rec 1) (wall 1)))))
+
+      (def z-diff
+        (if (pos? (angle 1))
+          (- z-diff)
+          z-diff))
+
+      (if (> (math/abs (angle 0))
+             (math/abs (angle 1)))
+        # "left"
+        [(+ ox x-diff) oy oz]
+        # "up"
+        [ox oy (- oz z-diff)]))))
+
 (defn handle-map-collisions
   []
   (let [scale 10
         player-pos (get-camera-position c)
         [px py pz] player-pos]
 
-    (comment
+    (do comment
       #draw player
       (draw-circle
         (math/round (* scale (+ px (* 0.5 map-w) 0.5)))
@@ -251,20 +283,35 @@
         (* scale 0.5)
         :blue))
 
-    (loop [x :range [0 map-w]
-           y :range [0 map-h]
-           :when (and (= [1 1 1 1]
-                         (map-pixels (+ (* y map-w)
-                                        x))))]
-      (comment
-        # drawing map
+    (loop [{:pos pos} :in enemies
+           :let [[ex ey ez] pos]]
+      (draw-circle
+        (math/round (* scale (+ ex (* 0.5 map-w) 0.5)))
+        (math/round (* scale (+ ez (* 0.5 map-h) 0.5)))
+        (* scale 0.5)
+        :purple))
+
+    ## drawing map
+    #
+    (do comment
+      (loop [x :range [0 map-w]
+             y :range [0 map-h]
+             :when (and (= [1 1 1 1]
+                           (map-pixels (+ (* y map-w)
+                                          x))))]
+
         (draw-rectangle (* scale x)
                         (* scale y)
                         scale
                         scale
                         :red)))
+    #
+    ## end of drawing map
 
-    (var nof-hits 0)
+    (put player :collision/nof-hits 0)
+
+    (loop [e :in enemies]
+      (put e :collision/nof-hits 0))
 
     (loop [x :range [0 map-w]
            y :range [0 map-h]
@@ -284,58 +331,43 @@
                        tile-rec)]
           (put b :dead true)))
 
-      (when (check-collision-circle-rec
-              (->map-pos map-w map-h px pz)
+      (when-let [new-pos (handle-wall-coll
+                           player
+                           (->map-pos map-w map-h px pz)
+                           tile-rec)]
 
-              0.25
-
-              tile-rec)
-
-        #(set-camera-position c last-player-pos)
-        (set last-coll [[(+ px (* 0.5 map-w) -0.0)
-                         (+ pz (* 0.5 map-h) -0.0)]
-                        [x
-                         y
-                         1
-                         1]])
-
-        (++ nof-hits)
-
-        (let [[p wall] last-coll]
-          (def angle (v- p wall))
-
-          (def x-diff (- (+ 0.5 0.25) (math/abs (- (p 0) (wall 0)))))
-
-          (def x-diff
-            (if (neg? (angle 0))
-              (- x-diff)
-              x-diff))
-
-          (def z-diff (- (+ 0.5 0.25) (math/abs (- (p 1) (wall 1)))))
-
-          (def z-diff
-            (if (pos? (angle 1))
-              (- z-diff)
-              z-diff))
-
-          (if (> (math/abs (angle 0))
-                 (math/abs (angle 1)))
-            # "left"
-            (do (print "left")
-              (set-camera-position c [(+ px x-diff) py pz]))
-            # "up"
-            (set-camera-position c [px py (- pz z-diff)])))
+        (set-camera-position c new-pos)
 
         (draw-rectangle (* scale x)
                         (* scale y)
                         scale
                         scale
-                        :green)))
+                        :green))
 
-    (when (< 2 nof-hits)
-      (set-camera-position c last-player-pos))
+      (loop [e :in enemies
+             :let [[ex ey ez] (in e :pos)]]
+        (when-let
+          [new-pos (handle-wall-coll
+                     e
+                     (->map-pos map-w map-h ex ez)
+                     tile-rec)]
 
-    (set last-player-pos (get-camera-position c))))
+          (put e :pos new-pos)
+
+          (draw-rectangle (* scale x)
+                          (* scale y)
+                          scale
+                          scale
+                          :green))))
+
+    (when (< 2 (player :collision/nof-hits))
+      (set-camera-position c (player :last-pos)))
+
+    (loop [e :in enemies]
+      (when (< 2 (in e :collision/nof-hits))
+        (put e :pos (in e :last-pos))))
+
+    (put player :last-pos (get-camera-position c))))
 
 (defn render
   [el]
