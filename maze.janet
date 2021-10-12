@@ -5,15 +5,27 @@
 (import ./coll :prefix "")
 (import ./exp :as explo)
 
+(import spork/path)
+
 (defonce inited-audio
   (do (init-audio-device)
     :ok))
 
-(def sounds
+(defonce sounds
   @{:notice1 (load-sound "resources/notice1.wav")
     :notice (load-sound "resources/notice2.wav")
     :running (load-sound "resources/running.wav")
     :scream (load-sound "resources/scream.wav")})
+
+(defonce images
+  (->> (os/dir "resources")
+       (filter |(= ".png" (path/ext $)))
+       (map (fn [path]
+              [(keyword
+                 (string/slice path 0 -5))
+               (load-texture (path/join "resources" path))]))
+       from-pairs))
+
 
 (defn sound
   [k]
@@ -85,12 +97,16 @@
   [p]
   (- 1 (math/pow 2 (* -10 p))))
 
+(defn ease-in-expo
+  [p]
+  (math/pow p 3))
+
 (defonce c
   (let [c (camera-3d :target [0 0 0]
                      :up [0 1 0]
                      :fovy 45
                      :type :perspective
-                     :position [7 0.4 7])]
+                     :position [7 1 7])]
 
     (set-camera-mode c :first-person)
     c))
@@ -111,7 +127,7 @@
 
 (def map-pos @[-16 0 -8])
 
-(def [map-w map-h] (get-image-dimensions im-map))
+(def [map-w map-h] (image-dimensions im-map))
 
 (defonce bill (load-texture "resources/halm.png"))
 
@@ -124,8 +140,10 @@
 (def enemies @[])
 
 (def player @{:pos (get-camera-position c)
+              :recovery-duration 23
               :last-pos (get-camera-position c)
               :radius 0.5
+              :attack-state @{:duration 0}
               :hp 38})
 
 
@@ -330,16 +348,24 @@
 (defn tick
   [el]
   (def [x y z] (player :pos))
+  (def attack-kind (get-in player [:attack-state :kind]))
 
   (when (el :focused?)
-    (when (mouse-button-pressed? 0)
+    (when (or (= attack-kind :shoot-full)
+              (= attack-kind :shoot-half)) # (mouse-button-released? 0)
       (def b @{:pos (array ;(player :pos))
                :sprite bullet
                :damage 13
+               :gravity 0
                :dir (cam-rot c)
-               :speed 0.25
+               :speed (if (= attack-kind :shoot-full)
+                        0.25
+                        0.125)
                :color :green})
-      (update-in b [:pos 1] - 0.01)
+
+      (update b :pos v+ (v* (cam-rot c) 1))
+
+      (update-in b [:pos 1] - 0.07)
       (array/push bullets b)))
 
   (loop [e :in enemies]
@@ -452,11 +478,13 @@
         (loop [b :in bullets
                :let [{:pos pos} b
                      [bx by bz] pos]
-               :when (check-collision-circle-rec
-                       (->map-pos map-w map-h bx bz)
-                       bullet-size
+               :when
+               (check-collision-circle-rec
+                 (->map-pos map-w map-h bx bz)
+                 bullet-size
 
-                       tile-rec)]
+                 tile-rec)]
+
           (put b :dead true)))
 
       (when-let [new-pos (handle-wall-coll
@@ -493,9 +521,7 @@
 
     (loop [e :in enemies]
       (when (< 2 (in e :collision/nof-hits))
-        (put e :pos (in e :last-pos))))
-
-    (put player :last-pos (get-camera-position c))))
+        (put e :pos (in e :last-pos))))))
 
 (defn render
   [el]
@@ -524,16 +550,17 @@
 
     (loop [b :in bullets
            :when (not (b :dead))
-           :let [{:damage damage} b
-                 b-pos [(get-in b [:pos 0])
-                        (get-in b [:pos 2])]]]
+           :let [{:damage damage
+                  :pos pos} b
+                 [bx by bz] pos
+                 b-pos [bx
+                        bz]]]
       (loop [e :in enemies
              :let [{:pos pos
                     :radius e-radius} e
                    [ex ey ez] pos
                    e-pos [ex ez]]
              :when (not (e :dead))]
-        (print "try hit enemy")
         (when (circle-circle? e-pos
                               e-radius
                               b-pos
@@ -630,14 +657,21 @@
            :let [{:pos pos
                   :sprite sprite
                   :dir dir
+                  :gravity gravity
                   :speed speed} b]]
 
-      (if (b :dead)
+      (cond
+        (b :dead)
         (draw-billboard c (get-render-texture explo/rt)
                         pos 0.5 :white)
 
+        (neg? (pos 1))
+        (put b :dead true)
+
         (do
           (update b :pos v+ (v* dir speed))
+          (update-in b [:pos 1] - gravity)
+          (update b :gravity + 0.002)
           (draw-billboard c sprite pos 0.1 :white)))))
 
   (handle-map-collisions)
@@ -657,6 +691,163 @@
   (draw-fps 600 0)
 
   (run-animations anims)
+
+  (let [as (in player :attack-state)
+        recovery-duration (in player :recovery-duration)
+        moved? (not= (in player :pos)
+                     (in player :last-pos))
+        duration (in as :duration)
+        last-state (get-in player [:attack-state :kind])
+        input-state (cond
+                      (and (el :focused?)
+                           (mouse-button-down? 0))
+                      :aim
+
+                      (and (el :focused?)
+                           (mouse-button-released? 0))
+                      :shoot
+
+                      :dangle)
+
+        state (cond
+                (or
+                  (= last-state :shoot-full)
+                  (= last-state :shoot-half))
+                :recovery
+
+                (and (< duration recovery-duration)
+                     (= last-state :recovery))
+                :recovery
+
+                (and (= last-state :pull-full)
+                     (= input-state :shoot))
+                :shoot-full
+
+                (and (= last-state :pull-half)
+                     (= input-state :shoot))
+                :shoot-half
+
+                (and (= input-state :aim)
+                     (= last-state :pull-full))
+                :pull-full
+
+                (and
+                  (= last-state :pull-half)
+                  (= input-state :aim)
+                  (>= duration 20))
+                :pull-full
+
+                (= input-state :aim)
+                :pull-half
+
+                moved?
+                :moving
+
+                nil)
+
+        _ (if (= state last-state)
+            (update as :duration inc)
+            (-> as
+                (put :duration 0)
+                (put :kind state)))
+
+        tex-kw (cond
+                 (= state :pull-full) :pull-full
+
+                 (= state :pull-half) :pull-half
+
+                 (= state :recovery) :slangbella-shoot
+
+                 (= state :moving)
+                 (if
+                   (< 20 (mod (+ duration 10) 40))
+                   :dangle-left
+                   :dangle-right)
+
+                 (in as :last-tex)
+                 (in as :last-tex)
+
+                 :dangle-right)
+
+        _ (put as :last-tex
+               (if (or (= tex-kw :dangle-left)
+                       (= tex-kw :dangle-right))
+                 tex-kw
+                 nil))
+
+        t (in images tex-kw)
+        scale (case state
+                :recovery (+ 4
+                             (ease-in-expo (/ duration recovery-duration)))
+                5)
+        [w h] (texture-dimensions t)
+
+        render-x
+        (case state
+          :recovery
+          (+ (- mw (* scale w))
+             (*
+               (- 1 (ease-in-expo
+                      (/ (max 0 (- duration 10)) (- recovery-duration 10))))
+               (-
+                 (- (* mw 0.5) (* scale w 0.5))
+                 (- mw (* scale w)))))
+
+          :shoot-full (- (* mw 0.5) (* scale w 0.5))
+          :shoot-half (- (* mw 0.5) (* scale w 0.5))
+
+          :pull-full (let [d (min 600
+                                  (max 0
+                                       (- duration 60)))]
+                       (- (* mw 0.5)
+                          (* scale w 0.5)
+                          (* d -0.05)
+                          (* 0.05
+                             d
+                             (/ (mod duration 7) 7))))
+
+          :pull-half (- (* mw 0.5) (* scale w 0.5))
+
+          (- mw (* scale w)))
+
+        render-y (case state
+                   :moving (- mh (* scale h)
+                              -30
+                              (* 30
+                                 (math/sin
+                                   (* 2 math/pi (/ (mod duration 40) 40)))))
+
+                   :pull-half (- mh (* scale h)
+                                 -5
+                                 (* 5
+                                    (/ (mod duration 5) 5)))
+
+                   :pull-full (let [d (min 600
+                                           (max 0
+                                                (- duration 60)))]
+                                (- mh (* scale h)
+                                   (* d -0.05)
+                                   (* 0.05
+                                      d
+                                      (/ (mod duration 8) 8))))
+
+                   nil (- mh (* scale h)
+                          -5
+                          (* 5
+                             (math/sin
+                               (* math/pi (/ (mod duration 60) 60)))))
+
+                   (- mh (* scale h)))]
+
+    (draw-texture-ex
+      t
+      [render-x
+       render-y]
+      0
+      scale
+      :white))
+
+  (put player :last-pos (get-camera-position c))
 
   #
   (render-debug-log)
