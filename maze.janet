@@ -5,8 +5,22 @@
 (import ./coll :prefix "")
 (import ./exp :as explo)
 
+(defonce inited-audio
+  (do (init-audio-device)
+    :ok))
+
+(def sounds
+  @{:notice1 (load-sound "resources/notice1.wav")
+    :notice (load-sound "resources/notice2.wav")
+    :running (load-sound "resources/running.wav")
+    :scream (load-sound "resources/scream.wav")})
+
+(defn sound
+  [k]
+  (play-sound (in sounds k)))
 
 (def render-scale 1)
+(def debug-scale 10)
 
 (def debug-logs @[])
 
@@ -40,7 +54,7 @@
                              " ")
                            ;args))
 
-  (first args))
+  (last args))
 
 (defn run-animations
   [anims]
@@ -76,7 +90,7 @@
                      :up [0 1 0]
                      :fovy 45
                      :type :perspective
-                     :position [0.2 0.4 0.2])]
+                     :position [7 0.4 7])]
 
     (set-camera-mode c :first-person)
     c))
@@ -114,15 +128,112 @@
               :radius 0.5
               :hp 38})
 
+
+#### START OF FUNCS
+
+
+(defn ->map-pos
+  [map-w map-h px py]
+  [(+ px (* 0.5 map-w))
+   (+ py (* 0.5 map-h))])
+
+
+(defn points-between-line
+  [[emx emy] [pmx pmy]]
+
+  (var points @[])
+
+  (let [emx (+ 0.5 emx)
+        emy (+ 0.5 emy)
+        pmx (+ 0.5 pmx)
+        pmy (+ 0.5 pmy)
+
+        start-x emx
+        stop-x pmx
+        start-y emy
+        stop-y pmy
+
+        dir (v-
+              [stop-x stop-y]
+              [start-x start-y])
+
+        divver (if (> (math/abs (dir 0)) (math/abs (dir 1)))
+                 (dir 0)
+                 (dir 1))
+
+        dir2 (v* dir (/ 1 (math/abs divver)))]
+
+    (var x start-x)
+    (var y start-y)
+
+    #                # determine direction of loop
+    (while (and ((if (< start-x stop-x) < >)
+                  x
+                  stop-x)
+                ((if (< start-y stop-y) < >)
+                  y
+                  stop-y))
+
+      # draw line points
+      (comment
+        (draw-circle (* debug-scale (+ 0.5 (math/floor x)))
+                     (* debug-scale (+ 0.5 (math/floor y)))
+                     5
+                     :yellow)
+        #
+)
+
+      (array/push points [x y])
+
+      (+= x (dir2 0))
+      (+= y (dir2 1))))
+
+  points)
+
+
+(defn walls-between
+  [o1 o2]
+  (var colls @[])
+  (loop [[x y] :in (points-between-line
+                     (->map-pos map-w map-h
+                                (get-in o1 [:pos 0])
+                                (get-in o1 [:pos 2]))
+                     (->map-pos map-w map-h
+                                (get-in o2 [:pos 0])
+                                (get-in o2 [:pos 2])))]
+    (when
+      (= [1 1 1 1]
+         (map-pixels (+ (* (math/floor y) map-w)
+                        (math/floor x))))
+      (math/floor x) (math/floor y)
+      (array/push colls [(math/floor x) (math/floor y)])))
+  colls)
+
 (defn aquire-target
   [e]
-  (let [{:target t
-         :pos pos} e]
-    (unless t
-      # just a ray, but some sort of delay after aquisition
-      # TODO: need to add (check-collision-ray-sphere)
 
-      (put e :target player))))
+  (if (e :aquiring)
+    (if-not (empty? (walls-between e (e :aquiring)))
+      (do
+        (put e :aquiring nil)
+        (put e :aquire-delay nil))
+
+      (do
+        (update e :aquire-delay dec)
+
+        (when (= 112 (e :aquire-delay))
+          (sound :notice1))
+
+        (when (neg? (e :aquire-delay))
+          (put e :target (e :aquiring))
+          (put e :aquiring nil)
+          (put e :aquire-delay nil)
+
+          (sound :running))))
+
+    (when (empty? (walls-between e player))
+      (put e :aquiring player)
+      (put e :aquire-delay 120))))
 
 (defn dying-npc
   [e])
@@ -159,30 +270,41 @@
   (if (e :dead)
     (dying-npc e)
     (do
-      (aquire-target e)
+      (unless (e :target)
+        (aquire-target e))
+
+      (when (e :target)
+        (def wb (walls-between e (e :target)))
+        (if-not (empty? wb)
+
+          (put e :target nil)
+
+          (when-let [t (e :target)]
+            (put e :target-pos (t :pos)))))
 
       (let [{:target t
              :pos pos
              :speed speed
              :attack-range attack-range} e
-            distance (dist (t :pos)
-                           pos)]
 
-        (when t
+            distance (when t
+                       (dist (t :pos) pos))]
+        (when-let [tp (e :target-pos)]
           (update e :dir (fn [dir]
                            (->
                              (v+ dir
                                  (v*
                                    (v-
-                                     (v- (t :pos) pos)
+                                     (v- tp pos)
                                      dir)
                                    0.1))
                              normalize)))
 
-          (if (< distance attack-range)
-            (:attack e t)
+          (if (and distance
+                   (e :target)
+                   (< distance attack-range))
+            (:attack e (e :target))
             (update e :pos v+ (v* (e :dir) speed))))))))
-
 
 (array/push enemies @{:pos @[1 0.2 1]
                       :dir @[0 0 0]
@@ -204,11 +326,6 @@
     (v-
       (get-camera-target c)
       (get-camera-position c))))
-
-(defn ->map-pos
-  [map-w map-h px py]
-  [(+ px (* 0.5 map-w))
-   (+ py (* 0.5 map-h))])
 
 (defn tick
   [el]
@@ -273,23 +390,8 @@
   []
   (let [scale 10
         player-pos (get-camera-position c)
-        [px py pz] player-pos]
-
-    (do comment
-      #draw player
-      (draw-circle
-        (math/round (* scale (+ px (* 0.5 map-w) 0.5)))
-        (math/round (* scale (+ pz (* 0.5 map-h) 0.5)))
-        (* scale 0.5)
-        :blue))
-
-    (loop [{:pos pos} :in enemies
-           :let [[ex ey ez] pos]]
-      (draw-circle
-        (math/round (* scale (+ ex (* 0.5 map-w) 0.5)))
-        (math/round (* scale (+ ez (* 0.5 map-h) 0.5)))
-        (* scale 0.5)
-        :purple))
+        [px py pz] player-pos
+        [pmx pmy] (->map-pos map-w map-h px pz)]
 
     ## drawing map
     #
@@ -305,6 +407,32 @@
                         scale
                         scale
                         :red)))
+
+    (do comment
+      #draw player
+      (draw-circle
+        (math/round (* scale (+ pmx 0.5)))
+        (math/round (* scale (+ pmy 0.5)))
+        (* scale 0.5)
+        :blue))
+
+    (loop [{:pos pos} :in enemies
+           :let [[ex ey ez] pos
+                 [emx emy] (->map-pos map-w map-h ex ez)]]
+      (draw-circle
+        (math/round (* scale (+ emx 0.5)))
+        (math/round (* scale (+ emy 0.5)))
+        (* scale 0.5)
+        :purple)
+
+      (draw-line-ex
+        [(math/round (* scale (+ ex (* 0.5 map-w) 0.5)))
+         (math/round (* scale (+ ez (* 0.5 map-h) 0.5)))]
+        [(math/round (* scale (+ px (* 0.5 map-w) 0.5)))
+         (math/round (* scale (+ pz (* 0.5 map-h) 0.5)))]
+        2
+        :white))
+
     #
     ## end of drawing map
 
@@ -385,7 +513,7 @@
   (draw-rectangle-rec [0 0 33 10] :gray)
 
   (def size 0.1)
-  (def scale 10)
+  (def scale debug-scale)
 
   (defer (end-mode-3d)
     (begin-mode-3d c)
@@ -445,6 +573,7 @@
           (put player :invul 60)
 
           (update player :hp - 12)
+          (sound :scream)
 
           (if (>= 0 (player :hp))
             (do
