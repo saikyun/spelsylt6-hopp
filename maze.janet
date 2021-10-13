@@ -118,7 +118,7 @@
 (defonce mesh (gen-mesh-cubicmap im-map [1 2 1]))
 (defonce model (load-model-from-mesh mesh))
 
-(defonce tex (load-texture "resources/cubicmap_atlas.png"))
+(defonce tex (load-texture "resources/cubicmap_atlas2.png"))
 (defonce mat (get-model-material model 0))
 (set-material-texture mat tex :diffuse)
 
@@ -128,8 +128,6 @@
 (def map-pos @[-16 0 -8])
 
 (def [map-w map-h] (image-dimensions im-map))
-
-(defonce bill (load-texture "resources/halm.png"))
 
 (defonce bullet (load-texture "resources/bullet.png"))
 
@@ -285,6 +283,8 @@
 
 (defn aggressive-melee-npc
   [e]
+  (put e :moved false)
+  (put-in e [:attack-state :input] nil)
   (if (e :dead)
     (dying-npc e)
     (do
@@ -304,7 +304,6 @@
              :pos pos
              :speed speed
              :attack-range attack-range} e
-
             distance (when t
                        (dist (t :pos) pos))]
         (when-let [tp (e :target-pos)]
@@ -318,23 +317,43 @@
                                    0.1))
                              normalize)))
 
+          (put-in e [:dir 1] 0)
+
           (if (and distance
                    (e :target)
                    (< distance attack-range))
-            (:attack e (e :target))
-            (update e :pos v+ (v* (e :dir) speed))))))))
+            (unless (get-in e [:target :invul])
+              (:attack e (e :target)))
+            (-> e
+                (put :moved true)
+                (update :pos v+ (v* (e :dir) speed)))))))))
 
-(array/push enemies @{:pos @[1 0.2 1]
-                      :dir @[0 0 0]
-                      :hp 28
-                      :attack-range 1
-                      :attack (fn [& args]
-                                #TODO: attack code
-)
-                      :speed 0.04
-                      :radius 0.5
-                      :blink 0
-                      :update aggressive-melee-npc})
+(def rat
+  @{:hp 28
+    :attack-range 1.5
+    :attack-startup 13
+    :attack-recovery 32
+
+    :dir @[0 0 0]
+
+    :attack (fn [self & args]
+              #TODO: attack code
+              (put-in self [:attack-state :input] :try-attack))
+    :speed 0.04
+    :radius 0.15
+    :blink 0
+    :update aggressive-melee-npc})
+
+
+(array/push enemies (-> (table/clone rat)
+                        (put :pos @[1 0.2 1])
+                        (put :attack-state @{:duration 0})))
+(array/push enemies (-> (table/clone rat)
+                        (put :pos @[0 0.2 1.2])
+                        (put :attack-state @{:duration 0})))
+(array/push enemies (-> (table/clone rat)
+                        (put :pos @[0.5 0.2 0.3])
+                        (put :attack-state @{:duration 0})))
 
 (varonce last-coll nil)
 
@@ -344,6 +363,22 @@
     (v-
       (get-camera-target c)
       (get-camera-position c))))
+
+
+(defn handle-non-wall-coll
+  [o o2]
+  (when (circle-circle?
+          (in o :pos) (in o :radius)
+          (in o2 :pos) (in o2 :radius))
+
+    (let [[ox oy oz] (in o :pos)]
+      (def angle
+
+        (normalize (v- (in o :pos) (in o2 :pos))))
+      (update o :pos v+ (v* angle
+                            (+ (in o :radius)
+                               (in o2 :radius)))))))
+
 
 (defn tick
   [el]
@@ -369,7 +404,10 @@
       (array/push bullets b)))
 
   (loop [e :in enemies]
-    (:update e))
+    (:update e)
+
+    (loop [e2 :in enemies]
+      (handle-non-wall-coll e e2)))
 
   (var i 0)
 
@@ -419,7 +457,7 @@
         [px py pz] player-pos
         [pmx pmy] (->map-pos map-w map-h px pz)]
 
-    ## drawing map
+    ## draw map
     #
     (do comment
       (loop [x :range [0 map-w]
@@ -434,30 +472,34 @@
                         scale
                         :red)))
 
-    (do comment
-      #draw player
+    ## draw player
+    #
+    (comment
       (draw-circle
         (math/round (* scale (+ pmx 0.5)))
         (math/round (* scale (+ pmy 0.5)))
         (* scale 0.5)
         :blue))
 
-    (loop [{:pos pos} :in enemies
-           :let [[ex ey ez] pos
-                 [emx emy] (->map-pos map-w map-h ex ez)]]
-      (draw-circle
-        (math/round (* scale (+ emx 0.5)))
-        (math/round (* scale (+ emy 0.5)))
-        (* scale 0.5)
-        :purple)
+    ## draw enemies
+    #
+    (comment
+      (loop [{:pos pos} :in enemies
+             :let [[ex ey ez] pos
+                   [emx emy] (->map-pos map-w map-h ex ez)]]
+        (draw-circle
+          (math/round (* scale (+ emx 0.5)))
+          (math/round (* scale (+ emy 0.5)))
+          (* scale 0.5)
+          :purple)
 
-      (draw-line-ex
-        [(math/round (* scale (+ ex (* 0.5 map-w) 0.5)))
-         (math/round (* scale (+ ez (* 0.5 map-h) 0.5)))]
-        [(math/round (* scale (+ px (* 0.5 map-w) 0.5)))
-         (math/round (* scale (+ pz (* 0.5 map-h) 0.5)))]
-        2
-        :white))
+        (draw-line-ex
+          [(math/round (* scale (+ ex (* 0.5 map-w) 0.5)))
+           (math/round (* scale (+ ez (* 0.5 map-h) 0.5)))]
+          [(math/round (* scale (+ px (* 0.5 map-w) 0.5)))
+           (math/round (* scale (+ pz (* 0.5 map-h) 0.5)))]
+          2
+          :white)))
 
     #
     ## end of drawing map
@@ -582,18 +624,24 @@
           [px py pz] player-pos
           player-pos-2d [px pz]]
 
-      (loop [e :in enemies
+      (loop [e :in (sort-by
+
+                     |(- (dist-sqr player-pos (in $ :pos)))
+
+                     enemies)
              :let [{:pos pos
                     :hit hit
                     :blink blink
-                    :radius e-radius} e
+                    :radius e-radius
+                    :attack-range attack-range} e
                    [ex ey ez] pos
                    e-pos [ex ez]]]
 
         (when (and
+                (= :attack-hit (get-in e [:attack-state :state]))
                 (not (player :invul))
                 (circle-circle? e-pos
-                                e-radius
+                                attack-range
                                 player-pos-2d
                                 (player :radius)))
 
@@ -625,6 +673,9 @@
 
             (anim
               (let [dur 30]
+                (loop [_ :range [0 10]]
+                  (yield nil))
+
                 (loop [f :range [0 dur]
                        :let [p (/ f (dec dur))
                              p (- 1 (ease-out-expo p))]]
@@ -648,10 +699,109 @@
 
             (update e :hit dec)))
 
-        (draw-billboard c bill
-                        pos 0.5 (if blink
-                                  :red
-                                  :white))))
+        (let [as (in e :attack-state)
+              last-state (in as :last-state)
+
+              state (cond
+                      (and (> (e :attack-recovery) (as :duration))
+                           (= last-state :recovery))
+                      :recovery
+
+                      (= last-state :attack-hit)
+                      :recovery
+
+                      (and
+                        (<= (e :attack-startup) (as :duration))
+                        (= last-state :attack-startup))
+                      :attack-hit
+
+                      (= last-state :attack-startup)
+                      :attack-startup
+
+                      (= :try-attack (in as :input))
+                      :attack-startup
+
+                      (e :moved)
+                      :walking
+
+                      :neutral)
+
+              _ (if (= last-state state)
+                  (update as :duration inc)
+                  (-> as
+                      (put :duration 0)
+                      (put :state state)))
+
+              rat-tex
+              (cond
+                (e :dead)
+                (images :rat-dead)
+
+                (and (< 5 (as :duration))
+                     (= state :recovery))
+                (images :rat-recovery)
+
+                (or
+                  (= state :recovery)
+                  (= state :attack-hit))
+                (images :rat-attack-hit)
+
+                (= state :attack-startup)
+                (images :rat-attack-startup)
+
+                (e :moved)
+                (if (< 10 (mod (as :duration) 20))
+                  (images :rat-walk-right)
+                  (images :rat-walk-left))
+
+                (images :rat-neutral))
+
+              scale (case state
+                      :attack-hit 1.6
+
+                      :recovery
+                      (- 1.5
+                         (* 1
+                            (ease-out-expo
+                              (max 0 (/ (- (as :duration) 8) (- (e :attack-recovery) 8))))))
+
+                      :attack-startup
+                      (+ 0.5
+                         (* 1
+                            (ease-out-expo
+                              (/ (as :duration) (e :attack-startup)))))
+
+                      0.5)
+
+              y-offset (case state
+
+                         :attack-hit 0.3
+                         :recovery
+                         (- 0.3
+                            (* 0.3
+                               (ease-out-expo
+                                 (/ (as :duration) (e :attack-recovery)))))
+
+                         :attack-startup
+                         (+ 0
+                            (* 0.3
+                               (ease-out-expo
+                                 (/ (as :duration) (e :attack-startup))))))]
+
+          (put as :last-state state)
+
+          (draw-billboard c
+                          rat-tex
+                          (if y-offset
+                            [(pos 0)
+                             (+ y-offset (pos 1))
+                             (pos 2)]
+
+                            pos)
+                          scale
+                          (if blink
+                            :red
+                            :white)))))
 
     (loop [b :in bullets
            :let [{:pos pos
@@ -676,17 +826,21 @@
 
   (handle-map-collisions)
 
-  (draw-rectangle (dec (* 0.5 mw))
-                  (dec (* 0.5 mh))
-                  3
-                  3
-                  [0 0 0 0.8])
+  # aim-dot
+  (comment
+    (draw-rectangle (dec (* 0.5 mw))
+                    (dec (* 0.5 mh))
+                    3
+                    3
+                    [0 0 0 0.8])
 
-  (draw-rectangle (* 0.5 mw)
-                  (* 0.5 mh)
-                  1
-                  1
-                  [1 1 1 0.8])
+    (draw-rectangle (* 0.5 mw)
+                    (* 0.5 mh)
+                    1
+                    1
+                    [1 1 1 0.8])
+    #
+)
 
   (draw-fps 600 0)
 
@@ -841,10 +995,10 @@
 
     (draw-texture-ex
       t
-      [render-x
-       render-y]
+      [(* render-scale render-x)
+       (* render-y render-scale)]
       0
-      scale
+      (* render-scale scale)
       :white))
 
   (put player :last-pos (get-camera-position c))
