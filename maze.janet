@@ -11,11 +11,89 @@
   (do (init-audio-device)
     :ok))
 
+(def fullscreen? false
+  # true
+)
+
+(comment
+  (import freja/state)
+  (put state/editor-state :left nil)
+
+  (keys state/editor-state)
+  #
+)
+
 (defonce sounds
-  @{:notice1 (load-sound "resources/notice1.wav")
-    :notice (load-sound "resources/notice2.wav")
-    :running (load-sound "resources/running.wav")
-    :scream (load-sound "resources/scream.wav")})
+  (-> @{:notice1 (load-sound "resources/notice1.wav")
+        :notice (load-sound "resources/notice2.wav")
+        :running (load-sound "resources/running.wav")
+        :scream (load-sound "resources/scream.wav")}
+
+      (merge-into
+        (->> (os/dir "resources/steps")
+             (filter |(= ".ogg" (path/ext $)))
+             (map (fn [path]
+                    [(keyword
+                       "steps/"
+                       (string/slice path 0 -5))
+                     (load-sound (path/join "resources" "steps" path))]))
+             from-pairs))))
+
+
+(defn sound
+  [k]
+  (let [s (in sounds k)]
+    (play-sound s)
+    s))
+
+(def steps
+  [:steps/step1
+   :steps/step2
+   # :steps/step3
+   # :steps/step4 ## too sharp?
+   :steps/step5
+   :steps/step6
+   :steps/step7])
+
+(comment
+  (sound :steps/step4))
+
+(defn random-elem
+  [ind]
+  (in ind (math/floor (* (length ind) (math/random)))))
+
+(var delay 20)
+
+(defn walking-sound
+  []
+  (var last (sounds (random-elem steps)))
+  (var second-to-last last)
+  (var s last)
+
+  (forever
+    (if (sound-playing? last)
+      (yield nil)
+      (do (loop [_ :range [0 delay]]
+            (yield nil))
+
+        (while (or (= s last)
+                   (= s second-to-last))
+          (def v (random-elem steps))
+          (print v)
+          (set s (sounds v)))
+
+        (set second-to-last last)
+        (set last s)
+
+        (set-sound-pitch s 0.8)
+        (set-sound-volume s 0.5)
+
+        (yield (play-sound s))))))
+
+(comment
+  #
+)
+
 
 (defonce images
   (->> (os/dir "resources")
@@ -26,10 +104,6 @@
                (load-texture (path/join "resources" path))]))
        from-pairs))
 
-
-(defn sound
-  [k]
-  (play-sound (in sounds k)))
 
 (def render-scale 1)
 (def debug-scale 10)
@@ -101,15 +175,19 @@
   [p]
   (math/pow p 3))
 
+(def start-pos [-14.5 1 -6.5])
+
 (defonce c
   (let [c (camera-3d :target [0 0 0]
                      :up [0 1 0]
                      :fovy 45
                      :type :perspective
-                     :position [7 1 7])]
+                     :position start-pos)]
 
     (set-camera-mode c :first-person)
     c))
+
+(set-camera-position c start-pos)
 
 (disable-cursor)
 
@@ -125,9 +203,9 @@
 (defonce map-pixels (get-image-data im-map))
 # (unload-image im-map)
 
-(def map-pos @[-16 0 -8])
+(def map-pos @[-16 0 -16])
 
-(def [map-w map-h] (image-dimensions im-map))
+(def [map-w map-h] (tracev (image-dimensions im-map)))
 
 (defonce bullet (load-texture "resources/bullet.png"))
 
@@ -344,16 +422,18 @@
     :blink 0
     :update aggressive-melee-npc})
 
-
-(array/push enemies (-> (table/clone rat)
-                        (put :pos @[1 0.2 1])
-                        (put :attack-state @{:duration 0})))
-(array/push enemies (-> (table/clone rat)
-                        (put :pos @[0 0.2 1.2])
-                        (put :attack-state @{:duration 0})))
-(array/push enemies (-> (table/clone rat)
-                        (put :pos @[0.5 0.2 0.3])
-                        (put :attack-state @{:duration 0})))
+(comment
+  (array/push enemies (-> (table/clone rat)
+                          (put :pos @[1 0.2 1])
+                          (put :attack-state @{:duration 0})))
+  (array/push enemies (-> (table/clone rat)
+                          (put :pos @[0 0.2 1.2])
+                          (put :attack-state @{:duration 0})))
+  (array/push enemies (-> (table/clone rat)
+                          (put :pos @[0.5 0.2 0.3])
+                          (put :attack-state @{:duration 0})))
+  #
+)
 
 (varonce last-coll nil)
 
@@ -474,7 +554,7 @@
 
     ## draw player
     #
-    (comment
+    (do comment
       (draw-circle
         (math/round (* scale (+ pmx 0.5)))
         (math/round (* scale (+ pmy 0.5)))
@@ -565,6 +645,8 @@
       (when (< 2 (in e :collision/nof-hits))
         (put e :pos (in e :last-pos))))))
 
+(def walk-sound-fib (fiber/new walking-sound))
+
 (defn render
   [el]
   (def {:width mw
@@ -573,6 +655,13 @@
   (when (el :focused?)
     (update-camera c)
     (put player :pos (get-camera-position c)))
+
+  (put player :moved?
+       (not= (in player :pos)
+             (in player :last-pos)))
+
+  (when (player :moved?)
+    (resume walk-sound-fib))
 
   (clear-background :white)
 
@@ -848,8 +937,7 @@
 
   (let [as (in player :attack-state)
         recovery-duration (in player :recovery-duration)
-        moved? (not= (in player :pos)
-                     (in player :last-pos))
+        moved? (player :moved?)
         duration (in as :duration)
         last-state (get-in player [:attack-state :kind])
         input-state (cond
@@ -1011,6 +1099,9 @@
   #
 )
 
+(import freja/state)
+(import freja/events :as e)
+
 (defn frame
   [el]
   (def {:width mw
@@ -1023,6 +1114,10 @@
 
     (when rt
       (unload-render-texture rt))
+    (when fullscreen?
+      (e/put! state/editor-state :right nil))
+
+    (print "load rt with size: " mw " " mh)
 
     (set rt (load-render-texture ;(map |(math/floor (* render-scale $)) last-size))))
 
@@ -1055,7 +1150,8 @@
   #
 )
 
-(start-game {:render (fn [el]
+(start-game {:left fullscreen?
+             :render (fn [el]
                        (try
                          (frame el)
                          ([err fib]
