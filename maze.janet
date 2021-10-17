@@ -11,8 +11,10 @@
   (do (init-audio-device)
     :ok))
 
-(def fullscreen? false
+(def fullscreen?
+  false
   # true
+  #
 )
 
 (comment
@@ -28,6 +30,25 @@
         :notice (load-sound "resources/notice2.wav")
         :running (load-sound "resources/running.wav")
         :scream (load-sound "resources/scream.wav")}
+
+      (merge-into
+        (->> (os/dir "resources")
+             (filter |(= ".ogg" (path/ext $)))
+             (map (fn [path]
+                    [(keyword
+                       (string/slice path 0 -5))
+                     (load-sound (path/join "resources" path))]))
+             from-pairs))
+
+      (merge-into
+        (->> (os/dir "resources/music")
+             (filter |(= ".ogg" (path/ext $)))
+             (map (fn [path]
+                    [(keyword
+                       "music/"
+                       (string/slice path 0 -5))
+                     (load-music-stream (path/join "resources/music" path))]))
+             from-pairs))
 
       (merge-into
         (->> (os/dir "resources/steps")
@@ -56,6 +77,51 @@
    :steps/step7])
 
 (comment
+
+  (stop-sound (sounds :ljusare-vind))
+
+  (play-music-stream (sounds :music/ljusare-vind))
+  (play-music-stream (sounds :music/low-vind-reverb))
+  (sound :music/low-vind-reverb)
+
+  (do
+    (array/clear anims)
+    (anim
+      (var i 0)
+      (def limit 700)
+      (def m (sounds :music/ljusare-vind))
+      (forever
+        (++ i)
+
+        (when (> i limit)
+          (set i 0))
+
+        (set-music-volume m (+ 0.2
+                               (* 0.1
+
+                                  (math/sin (* math/pi (/ i limit))))))
+
+        (yield (update-music-stream m))))
+
+    (anim
+      (var i 0)
+      (def limit 900)
+      (def m (sounds :music/low-vind-reverb))
+      (forever
+        (++ i)
+
+        (when (> i limit)
+          (set i 0))
+
+        (set-music-volume m (+ 0.2
+                               (* 0.1
+
+                                  (math/sin (* math/pi (/ i limit))))))
+
+        (yield (update-music-stream m)))))
+
+  (array/clear anims)
+
   (sound :steps/step4))
 
 (defn random-elem
@@ -85,7 +151,7 @@
         (set second-to-last last)
         (set last s)
 
-        (set-sound-pitch s 0.8)
+        # (set-sound-pitch s 0.8)
         (set-sound-volume s 0.5)
 
         (yield (play-sound s))))))
@@ -175,10 +241,18 @@
   [p]
   (math/pow p 3))
 
-(def start-pos [-14.5 1 -6.5])
+(def start-pos
+  (if (dyn 'c)
+    (get-camera-position ((dyn 'c) :value))
+    [-14.5 1 -14.5]))
+
+(def start-target
+  (if (dyn 'c)
+    (get-camera-target ((dyn 'c) :value))
+    [0 1 0]))
 
 (defonce c
-  (let [c (camera-3d :target [0 0 0]
+  (let [c (camera-3d :target start-target
                      :up [0 1 0]
                      :fovy 45
                      :type :perspective
@@ -187,25 +261,31 @@
     (set-camera-mode c :first-person)
     c))
 
+#(update-camera c)
+
 (set-camera-position c start-pos)
+#(set-camera-position c start-target)
 
 (disable-cursor)
 
-(defonce im-map (load-image-1 "resources/cubicmap.png"))
-(defonce cubicmap (load-texture-from-image im-map))
+(defonce im-map (load-image-1 "resources/map.png"))
 (defonce mesh (gen-mesh-cubicmap im-map [1 2 1]))
 (defonce model (load-model-from-mesh mesh))
+
 
 (defonce tex (load-texture "resources/cubicmap_atlas2.png"))
 (defonce mat (get-model-material model 0))
 (set-material-texture mat tex :diffuse)
 
 (defonce map-pixels (get-image-data im-map))
+
+(defonce enemy-map (load-image-1 "resources/enemy-map.png"))
+(defonce enemy-map-pixels (get-image-data enemy-map))
 # (unload-image im-map)
 
 (def map-pos @[-16 0 -16])
 
-(def [map-w map-h] (tracev (image-dimensions im-map)))
+(def [map-w map-h] (image-dimensions im-map))
 
 (defonce bullet (load-texture "resources/bullet.png"))
 
@@ -214,6 +294,27 @@
 
 (def bullets @[])
 (def enemies @[])
+(def notes @[])
+
+(array/push notes
+            {:dir [0 0 1]
+             :text `
+The rats are going crazy.
+We must do something.
+`
+             :pos [-14.5
+                   1
+                   -15.59]})
+
+(array/push notes
+            {:dir [1 0 0]
+             :text `
+I hid some bread in the cabinet.
+Just so the rats wouldn't get it.
+`
+             :pos [-5.41
+                   1
+                   -9]})
 
 (def player @{:pos (get-camera-position c)
               :recovery-duration 23
@@ -422,6 +523,20 @@
     :blink 0
     :update aggressive-melee-npc})
 
+
+(loop [x :range [0 map-w]
+       y :range [0 map-h]
+       :when (and (not= [1 1 1 1]
+                        (enemy-map-pixels (+ (* y map-w)
+                                             x))))]
+
+  (array/push enemies (-> (table/clone rat)
+                          (put :pos @[(- x -0.5 (* 0.5 map-w))
+                                      0.2
+                                      (- y -0.5 (* 0.5 map-w))])
+                          (put :attack-state @{:duration 0}))))
+
+
 (comment
   (array/push enemies (-> (table/clone rat)
                           (put :pos @[1 0.2 1])
@@ -499,9 +614,11 @@
 
 (defn handle-wall-coll
   [o o-rec wall]
+
+  (def radius (in o :radius))
   (when (check-collision-circle-rec
           o-rec
-          0.25
+          radius
           wall)
 
     (update o :collision/nof-hits inc)
@@ -509,14 +626,14 @@
     (let [[ox oy oz] (in o :pos)]
       (def angle (v- o-rec wall))
 
-      (def x-diff (- (+ 0.5 0.25) (math/abs (- (o-rec 0) (wall 0)))))
+      (def x-diff (- (+ 0.5 radius) (math/abs (- (o-rec 0) (wall 0)))))
 
       (def x-diff
         (if (neg? (angle 0))
           (- x-diff)
           x-diff))
 
-      (def z-diff (- (+ 0.5 0.25) (math/abs (- (o-rec 1) (wall 1)))))
+      (def z-diff (- (+ 0.5 radius) (math/abs (- (o-rec 1) (wall 1)))))
 
       (def z-diff
         (if (pos? (angle 1))
@@ -539,7 +656,7 @@
 
     ## draw map
     #
-    (do comment
+    (comment
       (loop [x :range [0 map-w]
              y :range [0 map-h]
              :when (and (= [1 1 1 1]
@@ -554,7 +671,7 @@
 
     ## draw player
     #
-    (do comment
+    (comment
       (draw-circle
         (math/round (* scale (+ pmx 0.5)))
         (math/round (* scale (+ pmy 0.5)))
@@ -647,6 +764,324 @@
 
 (def walk-sound-fib (fiber/new walking-sound))
 
+(defn render-hand
+  [{:focused? focused?
+    :width mw
+    :height mh}]
+  (let [as (in player :attack-state)
+        last-state (get-in player [:attack-state :kind])
+        input-state (cond
+                      (and focused?
+                           (mouse-button-pressed? 0))
+                      :touch
+
+                      nil)
+
+        state (cond
+                (or (and (> (in as :duration) 7)
+                         (= last-state :touch-end))
+                    (= last-state :touch))
+                :touch-end
+
+                (and (> (in as :duration) 7)
+                     (= last-state :touch-start))
+                :touch
+
+                (or (and
+                      (= input-state :touch)
+                      (nil? last-state))
+                    (= last-state :touch-start))
+                :touch-start
+
+                nil)
+
+        _ (if (= state last-state)
+            (update as :duration inc)
+            (-> as
+                (put :duration 0)
+                (put :kind state)))
+
+        duration (in as :duration)
+
+        tex-kw (cond
+                 (= state :touch)
+                 :hand-grab
+
+                 (and (> duration 4)
+                      (= state :touch-start))
+                 :hand-grab
+
+                 :hand-passive)
+
+        t (in images tex-kw)
+        scale (case state
+                :touch-start 7
+
+                6)
+
+        [w h] (texture-dimensions t)
+
+        render-x
+        (case state
+          :touch1236
+          (- (- (* 0.5 mw) (* 0.5 (* scale w)))
+             (* (- (- (* 0.5 mw) (* 0.5 (* scale w)))
+                   (- mw (* scale w)))
+                (- 1
+                   (ease-in-expo (/ (min duration 1) 1)))))
+
+          (- mw (* scale w)))
+
+        render-y (case state
+                   nil (- mh (* scale h)
+                          -5
+                          (* 5
+                             (math/sin
+                               (* math/pi (/ (mod duration 60) 60)))))
+
+                   (- mh (* scale h)))]
+
+    (draw-texture-ex
+      t
+      [(* render-scale render-x)
+       (* render-y render-scale)]
+      0
+      (* render-scale scale)
+      :white)))
+
+(defn render-slangbella
+  [{:focused? focused?
+    :width mw
+    :height mh}]
+  (let [as (in player :attack-state)
+        recovery-duration (in player :recovery-duration)
+        moved? (player :moved?)
+        duration (in as :duration)
+        last-state (get-in player [:attack-state :kind])
+        input-state (cond
+                      (and focused?
+                           (mouse-button-down? 0))
+                      :aim
+
+                      (and focused?
+                           (mouse-button-released? 0))
+                      :shoot
+
+                      :dangle)
+
+        state (cond
+                (or
+                  (= last-state :shoot-full)
+                  (= last-state :shoot-half))
+                :recovery
+
+                (and (< duration recovery-duration)
+                     (= last-state :recovery))
+                :recovery
+
+                (and (= last-state :pull-full)
+                     (= input-state :shoot))
+                :shoot-full
+
+                (and (= last-state :pull-half)
+                     (= input-state :shoot))
+                :shoot-half
+
+                (and (= input-state :aim)
+                     (= last-state :pull-full))
+                :pull-full
+
+                (and
+                  (= last-state :pull-half)
+                  (= input-state :aim)
+                  (>= duration 20))
+                :pull-full
+
+                (= input-state :aim)
+                :pull-half
+
+                moved?
+                :moving
+
+                nil)
+
+        _ (if (= state last-state)
+            (update as :duration inc)
+            (-> as
+                (put :duration 0)
+                (put :kind state)))
+
+        tex-kw (cond
+                 (= state :pull-full) :pull-full
+
+                 (= state :pull-half) :pull-half
+
+                 (= state :recovery) :slangbella-shoot
+
+                 (= state :moving)
+                 (if
+                   (< 20 (mod (+ duration 10) 40))
+                   :dangle-left
+                   :dangle-right)
+
+                 (in as :last-tex)
+                 (in as :last-tex)
+
+                 :dangle-right)
+
+        _ (put as :last-tex
+               (if (or (= tex-kw :dangle-left)
+                       (= tex-kw :dangle-right))
+                 tex-kw
+                 nil))
+
+        t (in images tex-kw)
+        scale (case state
+                :recovery (+ 4
+                             (ease-in-expo (/ duration recovery-duration)))
+                5)
+        [w h] (texture-dimensions t)
+
+        render-x
+        (case state
+          :recovery
+          (+ (- mw (* scale w))
+             (*
+               (- 1 (ease-in-expo
+                      (/ (max 0 (- duration 10)) (- recovery-duration 10))))
+               (-
+                 (- (* mw 0.5) (* scale w 0.5))
+                 (- mw (* scale w)))))
+
+          :shoot-full (- (* mw 0.5) (* scale w 0.5))
+          :shoot-half (- (* mw 0.5) (* scale w 0.5))
+
+          :pull-full (let [d (min 600
+                                  (max 0
+                                       (- duration 60)))]
+                       (- (* mw 0.5)
+                          (* scale w 0.5)
+                          (* d -0.05)
+                          (* 0.05
+                             d
+                             (/ (mod duration 7) 7))))
+
+          :pull-half (- (* mw 0.5) (* scale w 0.5))
+
+          (- mw (* scale w)))
+
+        render-y (case state
+                   :moving (- mh (* scale h)
+                              -30
+                              (* 30
+                                 (math/sin
+                                   (* 2 math/pi (/ (mod duration 40) 40)))))
+
+                   :pull-half (- mh (* scale h)
+                                 -5
+                                 (* 5
+                                    (/ (mod duration 5) 5)))
+
+                   :pull-full (let [d (min 600
+                                           (max 0
+                                                (- duration 60)))]
+                                (- mh (* scale h)
+                                   (* d -0.05)
+                                   (* 0.05
+                                      d
+                                      (/ (mod duration 8) 8))))
+
+                   nil (- mh (* scale h)
+                          -5
+                          (* 5
+                             (math/sin
+                               (* math/pi (/ (mod duration 60) 60)))))
+
+                   (- mh (* scale h)))]
+
+    (draw-texture-ex
+      t
+      [(* render-scale render-x)
+       (* render-y render-scale)]
+      0
+      (* render-scale scale)
+      :white)))
+
+(defn flash-text
+  [t x y size]
+  (anim
+    (let [w (fj/measure-text t size)
+          newline-delay 30
+          space-delay 1]
+
+      (var index 0)
+      (var delay 0)
+      (var delay-pos nil)
+
+      (loop [i :range [0 360]]
+        (if (pos? delay)
+          (-- delay)
+          (do
+            (set delay 1)
+
+            (++ index)))
+
+        (def t-to-show
+          (if (< index (length t))
+            (string/slice t 0 index)
+
+            t))
+
+        (when (and (not= delay-pos index)
+                   (= (chr "\n") (last t-to-show)))
+          (set delay-pos index)
+          (set delay newline-delay))
+
+        (when (and (not= delay-pos index)
+                   (= (chr " ") (last t-to-show)))
+          (set delay-pos index)
+          (set delay space-delay))
+
+        (def color
+          (cond
+            (> i 340)
+            [1 1 1 (- 1 (ease-in-out (/ (- i 340) 20)))]
+
+            :white))
+
+        (yield (fj/draw-text
+                 t-to-show
+                 (math/floor (- x (/ w 2)))
+                 (math/floor (- y (/ size 2)))
+                 size
+                 color))))))
+
+(defn handle-note
+  [mw mh {:pos pos :text text :dir dir}]
+
+  (let [close (> 0.1 (dist-sqr
+                       pos
+                       (v+
+                         (in player :pos)
+                         (v* (cam-rot c)
+                             0.5))))]
+
+    (draw-cube pos
+               0.2
+               0.2
+               0.2
+               (if close
+                 [0.5 0.5 0.4]
+                 [0.3 0.3 0.2]))
+
+    (when (and close
+               (= :touch (get-in player [:attack-state :kind])))
+      (flash-text
+        text
+        (/ mw 2)
+        (/ mh 2)
+        24))))
+
 (defn render
   [el]
   (def {:width mw
@@ -667,8 +1102,6 @@
 
   (tick el)
 
-  (draw-rectangle-rec [0 0 33 10] :gray)
-
   (def size 0.1)
   (def scale debug-scale)
 
@@ -679,6 +1112,8 @@
 
     (var coll false)
 
+    (loop [n :in notes]
+      (handle-note mw mh n))
     (loop [b :in bullets
            :when (not (b :dead))
            :let [{:damage damage
@@ -935,159 +1370,9 @@
 
   (run-animations anims)
 
-  (let [as (in player :attack-state)
-        recovery-duration (in player :recovery-duration)
-        moved? (player :moved?)
-        duration (in as :duration)
-        last-state (get-in player [:attack-state :kind])
-        input-state (cond
-                      (and (el :focused?)
-                           (mouse-button-down? 0))
-                      :aim
+  (render-hand el)
 
-                      (and (el :focused?)
-                           (mouse-button-released? 0))
-                      :shoot
-
-                      :dangle)
-
-        state (cond
-                (or
-                  (= last-state :shoot-full)
-                  (= last-state :shoot-half))
-                :recovery
-
-                (and (< duration recovery-duration)
-                     (= last-state :recovery))
-                :recovery
-
-                (and (= last-state :pull-full)
-                     (= input-state :shoot))
-                :shoot-full
-
-                (and (= last-state :pull-half)
-                     (= input-state :shoot))
-                :shoot-half
-
-                (and (= input-state :aim)
-                     (= last-state :pull-full))
-                :pull-full
-
-                (and
-                  (= last-state :pull-half)
-                  (= input-state :aim)
-                  (>= duration 20))
-                :pull-full
-
-                (= input-state :aim)
-                :pull-half
-
-                moved?
-                :moving
-
-                nil)
-
-        _ (if (= state last-state)
-            (update as :duration inc)
-            (-> as
-                (put :duration 0)
-                (put :kind state)))
-
-        tex-kw (cond
-                 (= state :pull-full) :pull-full
-
-                 (= state :pull-half) :pull-half
-
-                 (= state :recovery) :slangbella-shoot
-
-                 (= state :moving)
-                 (if
-                   (< 20 (mod (+ duration 10) 40))
-                   :dangle-left
-                   :dangle-right)
-
-                 (in as :last-tex)
-                 (in as :last-tex)
-
-                 :dangle-right)
-
-        _ (put as :last-tex
-               (if (or (= tex-kw :dangle-left)
-                       (= tex-kw :dangle-right))
-                 tex-kw
-                 nil))
-
-        t (in images tex-kw)
-        scale (case state
-                :recovery (+ 4
-                             (ease-in-expo (/ duration recovery-duration)))
-                5)
-        [w h] (texture-dimensions t)
-
-        render-x
-        (case state
-          :recovery
-          (+ (- mw (* scale w))
-             (*
-               (- 1 (ease-in-expo
-                      (/ (max 0 (- duration 10)) (- recovery-duration 10))))
-               (-
-                 (- (* mw 0.5) (* scale w 0.5))
-                 (- mw (* scale w)))))
-
-          :shoot-full (- (* mw 0.5) (* scale w 0.5))
-          :shoot-half (- (* mw 0.5) (* scale w 0.5))
-
-          :pull-full (let [d (min 600
-                                  (max 0
-                                       (- duration 60)))]
-                       (- (* mw 0.5)
-                          (* scale w 0.5)
-                          (* d -0.05)
-                          (* 0.05
-                             d
-                             (/ (mod duration 7) 7))))
-
-          :pull-half (- (* mw 0.5) (* scale w 0.5))
-
-          (- mw (* scale w)))
-
-        render-y (case state
-                   :moving (- mh (* scale h)
-                              -30
-                              (* 30
-                                 (math/sin
-                                   (* 2 math/pi (/ (mod duration 40) 40)))))
-
-                   :pull-half (- mh (* scale h)
-                                 -5
-                                 (* 5
-                                    (/ (mod duration 5) 5)))
-
-                   :pull-full (let [d (min 600
-                                           (max 0
-                                                (- duration 60)))]
-                                (- mh (* scale h)
-                                   (* d -0.05)
-                                   (* 0.05
-                                      d
-                                      (/ (mod duration 8) 8))))
-
-                   nil (- mh (* scale h)
-                          -5
-                          (* 5
-                             (math/sin
-                               (* math/pi (/ (mod duration 60) 60)))))
-
-                   (- mh (* scale h)))]
-
-    (draw-texture-ex
-      t
-      [(* render-scale render-x)
-       (* render-y render-scale)]
-      0
-      (* render-scale scale)
-      :white))
+  #(render-slangbella el)
 
   (put player :last-pos (get-camera-position c))
 
@@ -1149,6 +1434,43 @@
     :white)
   #
 )
+
+(play-music-stream (sounds :music/ljusare-vind))
+(play-music-stream (sounds :music/low-vind-reverb))
+
+(do
+  (array/clear anims)
+  (anim
+    (var i 500)
+    (def limit 700)
+    (def m (sounds :music/ljusare-vind))
+    (forever
+      (++ i)
+
+      (when (> i limit)
+        (set i 0))
+
+      (set-music-volume m (+ 0.2
+                             (* 0.2
+                                (math/sin (* math/pi (/ i limit))))))
+
+      (yield (update-music-stream m))))
+
+  (anim
+    (var i 0)
+    (def limit 900)
+    (def m (sounds :music/low-vind-reverb))
+    (forever
+      (++ i)
+
+      (when (> i limit)
+        (set i 0))
+
+      (set-music-volume m (+ 0.2
+                             (* 0.2
+                                (math/sin (* math/pi (/ i limit))))))
+
+      (yield (update-music-stream m)))))
 
 (start-game {:left fullscreen?
              :render (fn [el]
