@@ -7,6 +7,11 @@
 
 (import spork/path)
 
+(defonce saved-levels
+  @{})
+
+(def levels @{})
+
 (defonce inited-audio
   (do (init-audio-device)
     :ok))
@@ -16,6 +21,7 @@
   # true
   #
 )
+
 
 (comment
   (import freja/state)
@@ -76,54 +82,6 @@
    :steps/step6
    :steps/step7])
 
-(comment
-
-  (stop-sound (sounds :ljusare-vind))
-
-  (play-music-stream (sounds :music/ljusare-vind))
-  (play-music-stream (sounds :music/low-vind-reverb))
-  (sound :music/low-vind-reverb)
-
-  (do
-    (array/clear anims)
-    (anim
-      (var i 0)
-      (def limit 700)
-      (def m (sounds :music/ljusare-vind))
-      (forever
-        (++ i)
-
-        (when (> i limit)
-          (set i 0))
-
-        (set-music-volume m (+ 0.2
-                               (* 0.1
-
-                                  (math/sin (* math/pi (/ i limit))))))
-
-        (yield (update-music-stream m))))
-
-    (anim
-      (var i 0)
-      (def limit 900)
-      (def m (sounds :music/low-vind-reverb))
-      (forever
-        (++ i)
-
-        (when (> i limit)
-          (set i 0))
-
-        (set-music-volume m (+ 0.2
-                               (* 0.1
-
-                                  (math/sin (* math/pi (/ i limit))))))
-
-        (yield (update-music-stream m)))))
-
-  (array/clear anims)
-
-  (sound :steps/step4))
-
 (defn random-elem
   [ind]
   (in ind (math/floor (* (length ind) (math/random)))))
@@ -160,7 +118,6 @@
   #
 )
 
-
 (defonce images
   (->> (os/dir "resources")
        (filter |(= ".png" (path/ext $)))
@@ -179,6 +136,7 @@
 (set-target-fps 60)
 
 (def anims @[])
+
 
 (varfn death-screen
   [mw mh]
@@ -343,73 +301,126 @@
                  size
                  color))))))
 
-(def start-pos
-  (if (dyn 'c)
-    (get-camera-position ((dyn 'c) :value))
-    [-14.5 1 -14.5] # original start-pos
-    #'(-9.02823 1.00828 -2.31514)
-))
-
-(def start-target
-  (if (dyn 'c)
-    (get-camera-target ((dyn 'c) :value))
-    [0 1 0]))
-
 (defonce c
-  (let [c (camera-3d :target start-target
-                     :up [0 1 0]
-                     :fovy 65
-                     :type :perspective
-                     :position start-pos)]
+
+  (let [c
+        (camera-3d :target [0 1 0]
+                   :up [0 1 0]
+                   :fovy 65
+                   :type :perspective
+                   :position [0 1 -2])]
 
     (set-camera-mode c :first-person)
+
     c))
 
-#(update-camera c)
 
-(set-camera-position c start-pos)
-#(set-camera-position c start-target)
+(var map-pos nil)
+(var map-w nil)
+(var map-h nil)
+(var map-pixels nil)
+(var map-model nil)
 
 (disable-cursor)
 
-(defonce im-map (load-image-1 "resources/map.png"))
-(defonce mesh (gen-mesh-cubicmap im-map [1 2 1]))
-(defonce model (load-model-from-mesh mesh))
-
-
-(defonce tex (load-texture "resources/cubicmap_atlas2.png"))
-(defonce mat (get-model-material model 0))
-(set-material-texture mat tex :diffuse)
-
-(defonce map-pixels (get-image-data im-map))
 
 (defonce enemy-map (load-image-1 "resources/enemy-map.png"))
 (defonce enemy-map-pixels (get-image-data enemy-map))
 # (unload-image im-map)
 
-(def map-pos @[-16 0 -16])
-
-(def [map-w map-h] (image-dimensions im-map))
-
-(defonce bullet (load-texture "resources/bullet.png"))
-
 (def last-size @[nil nil])
 (var rt (load-render-texture 0 0))
 
-(def bullets @[])
-(def enemies @[])
-
-(def player @{:pos (get-camera-position c)
-              :inventory @{}
-              :hope 5
-              :recovery-duration 23
-              :last-pos (get-camera-position c)
-              :radius 0.5
-              :attack-state @{:duration 0}
-              :hp 38})
+(var bullets @[])
+(var enemies @[])
 
 
-(def notes @[])
+(defonce player @{:inventory @{}
+                  :hope 5
+                  :recovery-duration 23
+                  :radius 0.5
+                  :attack-state @{:duration 0}
+                  :hp 38})
+
+
+(var notes @[])
+
+(var current-level nil)
+
+
+(defn init-level
+  [level-name spawn-point]
+  #(array/clear anims)
+
+  (def level (levels level-name))
+  (assert level (string/format "only %p levels exist, not %p" (keys levels) level-name))
+
+  # set up camera
+  (let [spawn-point (get-in level [:spawn-points spawn-point])
+
+        start-pos
+        #(if c
+        #(get-camera-position c)
+        spawn-point # original start-pos
+        #'(-9.02823 1.00828 -2.31514)
+        #)
+]
+
+    (set-camera-position c start-pos)
+
+    (put player
+         :last-pos (get-camera-position c))
+    (put player :pos (get-camera-position c)))
+
+  # init map
+
+
+  (let [im-map (load-image-1 (level :map))
+        mesh (gen-mesh-cubicmap im-map [1 2 1])
+        model (load-model-from-mesh mesh)
+        mat (get-model-material model 0)
+        pixels (get-image-data im-map)
+        [w h] (image-dimensions im-map)]
+
+    (set map-model model)
+    (set map-pixels pixels)
+    (set map-w w)
+    (set map-h h)
+
+    (set map-pos @[(- (math/floor (/ w 2))) 0 (- (math/floor (/ w 2)))])
+
+    (set-material-texture mat (level :map-texture) :diffuse))
+
+  (if-let [{:enemies es
+            :notes ns
+            :bullets bs} (saved-levels level-name)]
+    (do
+      (print "you have been on this level")
+      (set enemies es)
+      (set notes ns)
+      (set bullets bs))
+    (do
+      (set enemies @[])
+      (set notes @[])
+      (set bullets @[])
+      (:init level)))
+
+  (set current-level level-name))
+
+(var level-to-change-to nil)
+
+(defn save-level
+  [level]
+  (put saved-levels
+       level
+       {:enemies enemies
+        :notes notes
+        :bullets bullets}))
+
+(defn change-level
+  [level-name spawn-point]
+  (save-level current-level)
+  (set level-to-change-to [level-name spawn-point]))
 
 #### START OF FUNCS
 
@@ -529,6 +540,9 @@
 
 (defn render-debug-log
   []
+
+  (log (player :inventory))
+
   (unless (empty? debug-logs)
     (let [y-offset 180
           size 16
@@ -631,20 +645,6 @@
     :blink 0
     :update aggressive-melee-npc})
 
-
-(loop [x :range [0 map-w]
-       y :range [0 map-h]
-       :when (and (not= [1 1 1 1]
-                        (enemy-map-pixels (+ (* y map-w)
-                                             x))))]
-
-  (array/push enemies (-> (table/clone rat)
-                          (put :pos @[(- x -0.5 (* 0.5 map-w))
-                                      0.2
-                                      (- y -0.5 (* 0.5 map-w))])
-                          (put :attack-state @{:duration 0}))))
-
-
 (comment
   (array/push enemies (-> (table/clone rat)
                           (put :pos @[1 0.2 1])
@@ -673,7 +673,6 @@
                  1000
                  1000
                  [0 0 1 p]))))))
-
 
 (defn handle-note
   [note mw mh]
@@ -789,319 +788,6 @@
 )})
 
 
-(do
-  (array/clear notes)
-
-  (array/push notes
-              @{:tick handle-note
-                :dir [0 0 1]
-                :timer 0
-                :text `
-These rats are too scary. :(
-We've gotta do something.
- - Todd
-`
-                :pos [-10.41
-                      1
-                      -12.5]})
-
-  (array/push notes
-              @{:tick handle-note
-                :dir [1 0 0]
-                :timer 0
-                :text `
-I hid the walnut bread in the cabinet.
-Just so the rats wouldn't get it.
-It smells so good.
- - Caitlyn
-`
-                :pos [-5.41
-                      1
-                      -9]})
-
-  #### trapp
-
-  (array/push notes
-              @{:dir [1 0 0]
-                :timer 0
-                :text `
-I'm free!
-`
-                :pos [-10.5
-                      1
-                      14.599]
-
-                :tick (fn [note mw mh]
-                        (let [{:pos pos
-                               :text text
-                               :dir dir
-                               :timer timer
-                               :last-tex last-tex} note
-                              close (> 0.1 (dist-sqr
-                                             pos
-                                             (v+
-                                               (in player :pos)
-                                               (v* (cam-rot c)
-                                                   0.5))))
-
-                              _ (when (neg? timer)
-                                  (put note :timer 5))
-
-                              tex (if (or (nil? last-tex)
-                                          (neg? timer))
-                                    (if
-                                      (< 0.3 (math/random))
-                                      (images :trapp)
-                                      (images :trapp))
-
-                                    last-tex)]
-
-                          (put note :last-tex tex)
-                          (update note :timer dec)
-
-                          (draw-cube-texture
-                            tex
-                            pos
-                            1
-                            2
-                            0.2
-                            :white)
-
-                          (when (and close
-                                     (not (note :used)))
-
-                            (put note :used true)
-
-                            (anim
-                              (var i 0)
-                              (forever
-                                (++ i)
-                                (yield
-                                  (draw-rectangle
-                                    0
-                                    0
-                                    1000
-                                    1000
-                                    [0 0 0.2
-                                     (math/sin (* math/pi 0.5
-                                                  (min 1 (/ i 100))))])))))))})
-
-  # cabinet
-
-  (array/push notes
-              (table/setproto
-                @{:pos [-12.5 0.5 -7.5]
-                  :content :bread
-                  :pickup (fn [_ player content]
-                            (gain-hope player 2)
-                            (flash-text
-                              ``
-Ooh, fresh bread!
-                       ``
-                              (/ render-width 2)
-                              (/ render-height 1.5)
-                              24
-                              :player-says))}
-                cabinet))
-
-  (array/push notes
-              (table/setproto
-                @{:pos [-0.44 0.5 1.24]
-                  :content :lockpick
-                  :pickup (fn [_ player content]
-                            (gain-hope player 1)
-                            (flash-text
-                              ``
-Didn't think I'd see a lockpick again...
-``
-                              (/ render-width 2)
-                              (/ render-height 1.5)
-                              24
-                              :player-says))}
-                cabinet))
-
-  # first bars
-  (array/push notes
-              @{:pos [-13.4 1 -14.1]
-
-                :walls [[;(map math/ceil (->map-pos map-w map-h -13.4 -14.1))
-                         1
-                         1]]
-
-                :rotation 0
-
-                :tick
-                (fn [self mw mh]
-                  (let [{:pos pos
-                         :rotation rot} self
-                        close (> 1 (dist-sqr
-                                     pos
-                                     (v+
-                                       (in player :pos)
-                                       (v* (cam-rot c)
-                                           0.5))))]
-
-                    (defer (rl-pop-matrix)
-                      (rl-push-matrix)
-
-                      (rl-translatef ;pos)
-
-                      (rl-translatef 0 0 (* 2.5 0.2))
-
-                      (rl-rotatef rot 0 1 0)
-
-                      (loop [i :range [0 5]]
-
-                        (draw-cube-texture
-                          (in images :bar)
-
-                          [0 0 (* i -0.2)]
-
-                          0.1
-                          2
-                          0.1
-
-                          (if (and (self :walls) close)
-                            :white
-                            :gray))))
-
-                    (when (and close
-                               (self :walls)
-                               (= :touch (get-in player [:attack-state :kind])))
-
-                      (do
-                        (put-in player [:inventory :lockpick] nil)
-
-                        (flash-text
-                          ``
-It's not even locked...
-``
-                          (/ mw 2)
-                          (/ mh 1.5)
-                          24
-                          :player-says)
-
-                        (anim
-                          (loop [_ :range [0 10]]
-                            (yield nil))
-
-                          (put self :walls false)
-
-                          (loop [i :range [0 60]]
-                            (print (self :rot))
-                            (put self :rotation (* 95 (ease-in-out (/ i 59))))
-                            (yield nil))
-
-                          (gain-hope player 1)))))
-
-                  #
-)})
-
-  # bars
-  (array/push notes
-              @{:pos [-10.7 1 0]
-
-                :walls [[;(map math/ceil (->map-pos map-w map-h -10 0))
-                         1
-                         1]
-                        [;(map math/ceil (->map-pos map-w map-h -11 0))
-                         1
-                         1]]
-
-                :rotation 0
-
-                :tick
-                (fn [self mw mh]
-                  (let [{:pos pos
-                         :rotation rot} self
-                        close (> 1 (dist-sqr
-                                     pos
-                                     (v+
-                                       (in player :pos)
-                                       (v* (cam-rot c)
-                                           0.5))))]
-
-                    (player :pos)
-
-                    (defer (rl-pop-matrix)
-                      (rl-push-matrix)
-
-                      (rl-translatef ;pos)
-
-                      (rl-translatef (* 2.5 0.4) 0 0)
-
-                      (rl-rotatef rot 0 1 0)
-
-                      (loop [i :range [0 5]]
-
-                        (draw-cube-texture
-                          (in images :bar)
-
-                          [(* i -0.4) 0 0]
-
-                          0.1
-                          2
-                          0.1
-
-                          (if close
-                            :white
-                            :gray))))
-
-                    (when (and close
-                               (= :touch (get-in player [:attack-state :kind])))
-                      (if (get-in player [:inventory :lockpick])
-                        (do
-                          (put-in player [:inventory :lockpick] nil)
-
-                          (put self :walls nil)
-
-                          (flash-text
-                            ``
-Let's see...
-``
-                            (/ mw 2)
-                            (/ mh 1.5)
-                            24
-                            :player-says)
-
-                          (anim
-                            (loop [_ :range [0 180]]
-                              (yield nil))
-
-                            (flash-text
-                              ``
-Yes!
-``
-                              (/ mw 2)
-                              (/ mh 1.5)
-                              24
-                              :player-says)
-
-                            (loop [i :range [0 60]]
-                              (print (self :rot))
-                              (put self :rotation (* 95 (ease-in-out (/ i 59))))
-                              (yield nil))
-
-                            (gain-hope player 3)))
-                        (flash-text
-                          ``
-It's locked.
-Jeez!
-``
-                          (/ mw 2)
-                          (/ mh 1.5)
-                          24
-                          :player-says))))
-
-                  #
-)})
-
-  :ok
-
-  #
-)
-
-
 (varonce last-coll nil)
 
 
@@ -1113,7 +799,7 @@ Jeez!
           o-rec
           radius
           wall)
-    (update o :collision/nof-hits inc)
+    (update o :collision/nof-hits |(inc (or $ 0)))
 
     (let [[ox oy oz] (in o :pos)]
       (def angle (v- o-rec wall))
@@ -1185,7 +871,7 @@ Jeez!
     (when (or (= attack-kind :shoot-full)
               (= attack-kind :shoot-half)) # (mouse-button-released? 0)
       (def b @{:pos (array ;(player :pos))
-               :sprite bullet
+               :sprite (images :bullet)
                :damage 13
                :gravity 0
 
@@ -1390,9 +1076,6 @@ The bread is dirty...
     #
     ## end of drawing map
 
-
-    (loop [e :in enemies]
-      (put e :collision/nof-hits 0))
 
     (loop [x :range [0 map-w]
            y :range [0 map-h]
@@ -1822,6 +1505,9 @@ The bread is dirty...
 
   (put player :collision/nof-hits 0)
 
+  (loop [e :in enemies]
+    (put e :collision/nof-hits 0))
+
   (put player :moved?
        (not= (in player :pos)
              (in player :last-pos)))
@@ -1841,7 +1527,7 @@ The bread is dirty...
   (defer (end-mode-3d)
     (begin-mode-3d c)
 
-    (draw-model model map-pos 1 :white)
+    (draw-model map-model map-pos 1 :white)
 
     (var coll false)
 
@@ -1910,9 +1596,7 @@ The bread is dirty...
           player-pos-2d [px pz]]
 
       (loop [e :in (sort-by
-
                      |(- (dist-sqr player-pos (in $ :pos)))
-
                      enemies)
              :let [{:pos pos
                     :hit hit
@@ -2143,12 +1827,17 @@ The bread is dirty...
 
   #(render-slangbella el)
 
+
   (put player :last-pos (get-camera-position c))
 
   #
   (render-debug-log)
   #
 
+
+  (when level-to-change-to
+    (init-level ;level-to-change-to)
+    (set level-to-change-to nil))
 
   #
 )
@@ -2240,6 +1929,425 @@ The bread is dirty...
                                 (math/sin (* math/pi (/ i limit))))))
 
       (yield (update-music-stream m)))))
+
+(def floor-1
+  {:spawn-points {:cell [-14.5 1 -14.5]
+                  :stairs [-10.5
+                           1
+                           13.599]}
+   :map "resources/map.png"
+   :map-texture (images :cubicmap_atlas2)
+
+   :init (fn [self]
+
+           (loop [x :range [0 map-w]
+                  y :range [0 map-h]
+                  :when (and (not= [1 1 1 1]
+                                   (enemy-map-pixels (+ (* y map-w)
+                                                        x))))]
+
+             (array/push enemies (-> (table/clone rat)
+                                     (put :pos @[(- x -0.5 (* 0.5 map-w))
+                                                 0.2
+                                                 (- y -0.5 (* 0.5 map-w))])
+                                     (put :attack-state @{:duration 0}))))
+
+           (do
+             (array/clear notes)
+
+             (array/push notes
+                         @{:tick handle-note
+                           :dir [0 0 1]
+                           :timer 0
+                           :text `
+These rats are too scary. :(
+We've gotta do something.
+ - Todd
+`
+                           :pos [-10.41
+                                 1
+                                 -12.5]})
+
+             (array/push notes
+                         @{:tick handle-note
+                           :dir [1 0 0]
+                           :timer 0
+                           :text `
+I hid the walnut bread in the cabinet.
+Just so the rats wouldn't get it.
+It smells so good.
+ - Caitlyn
+`
+                           :pos [-5.41
+                                 1
+                                 -9]})
+
+             #### trapp
+
+             (array/push notes
+                         @{:dir [1 0 0]
+                           :timer 0
+                           :text `
+I'm free!
+`
+                           :pos [-10.5
+                                 1
+                                 14.599]
+
+                           :tick (fn [note mw mh]
+                                   (let [{:pos pos
+                                          :text text
+                                          :dir dir
+                                          :timer timer
+                                          :last-tex last-tex} note
+                                         close (> 0.1 (dist-sqr
+                                                        pos
+                                                        (v+
+                                                          (in player :pos)
+                                                          (v* (cam-rot c)
+                                                              0.5))))
+
+                                         _ (when (neg? timer)
+                                             (put note :timer 5))
+
+                                         tex (if (or (nil? last-tex)
+                                                     (neg? timer))
+                                               (if
+                                                 (< 0.3 (math/random))
+                                                 (images :trapp)
+                                                 (images :trapp))
+
+                                               last-tex)]
+
+                                     (put note :last-tex tex)
+                                     (update note :timer dec)
+
+                                     (draw-cube-texture
+                                       tex
+                                       pos
+                                       1
+                                       2
+                                       0.2
+                                       :white)
+
+                                     (when close
+                                       (anim
+                                         (loop [i :range [0 60]]
+                                           (when (= i 30) (change-level :floor0 :stairs))
+                                           (yield
+                                             (draw-rectangle
+                                               0
+                                               0
+                                               1000
+                                               1000
+                                               [0 0 0.2
+                                                (math/sin (* math/pi
+                                                             (min 1 (/ i 60))))])))
+
+                                         #
+))
+
+                                     #                             
+))})
+
+             # cabinet
+
+             (array/push notes
+                         (table/setproto
+                           @{:pos [-12.5 0.5 -7.5]
+                             :content :bread
+                             :pickup (fn [_ player content]
+                                       (gain-hope player 2)
+                                       (flash-text
+                                         ``
+Ooh, fresh bread!
+                       ``
+                                         (/ render-width 2)
+                                         (/ render-height 1.5)
+                                         24
+                                         :player-says))}
+                           cabinet))
+
+             (array/push notes
+                         (table/setproto
+                           @{:pos [-0.44 0.5 1.24]
+                             :content :lockpick
+                             :pickup (fn [_ player content]
+                                       (gain-hope player 1)
+                                       (flash-text
+                                         ``
+Didn't think I'd see a lockpick again...
+``
+                                         (/ render-width 2)
+                                         (/ render-height 1.5)
+                                         24
+                                         :player-says))}
+                           cabinet))
+
+             # first bars
+             (array/push notes
+                         @{:pos [-13.4 1 -14.1]
+
+                           :walls [[;(map math/ceil (->map-pos map-w map-h -13.4 -14.1))
+                                    1
+                                    1]]
+
+                           :rotation 0
+
+                           :tick
+                           (fn [self mw mh]
+                             (let [{:pos pos
+                                    :rotation rot} self
+                                   close (> 1 (dist-sqr
+                                                pos
+                                                (v+
+                                                  (in player :pos)
+                                                  (v* (cam-rot c)
+                                                      0.5))))]
+
+                               (defer (rl-pop-matrix)
+                                 (rl-push-matrix)
+
+                                 (rl-translatef ;pos)
+
+                                 (rl-translatef 0 0 (* 2.5 0.2))
+
+                                 (rl-rotatef rot 0 1 0)
+
+                                 (loop [i :range [0 5]]
+
+                                   (draw-cube-texture
+                                     (in images :bar)
+
+                                     [0 0 (* i -0.2)]
+
+                                     0.1
+                                     2
+                                     0.1
+
+                                     (if (and (self :walls) close)
+                                       :white
+                                       :gray))))
+
+                               (when (and close
+                                          (self :walls)
+                                          (= :touch (get-in player [:attack-state :kind])))
+
+                                 (do
+                                   (put-in player [:inventory :lockpick] nil)
+
+                                   (flash-text
+                                     ``
+It's not even locked...
+``
+                                     (/ mw 2)
+                                     (/ mh 1.5)
+                                     24
+                                     :player-says)
+
+                                   (anim
+                                     (loop [_ :range [0 10]]
+                                       (yield nil))
+
+                                     (put self :walls false)
+
+                                     (loop [i :range [0 60]]
+                                       (print (self :rot))
+                                       (put self :rotation (* 95 (ease-in-out (/ i 59))))
+                                       (yield nil))
+
+                                     (gain-hope player 1)))))
+
+                             #
+)})
+
+             # bars
+             (array/push notes
+                         @{:pos [-10.7 1 0]
+
+                           :walls [[;(map math/ceil (->map-pos map-w map-h -10 0))
+                                    1
+                                    1]
+                                   [;(map math/ceil (->map-pos map-w map-h -11 0))
+                                    1
+                                    1]]
+
+                           :rotation 0
+
+                           :tick
+                           (fn [self mw mh]
+                             (let [{:pos pos
+                                    :rotation rot} self
+                                   close (> 1 (dist-sqr
+                                                pos
+                                                (v+
+                                                  (in player :pos)
+                                                  (v* (cam-rot c)
+                                                      0.5))))]
+
+                               (player :pos)
+
+                               (defer (rl-pop-matrix)
+                                 (rl-push-matrix)
+
+                                 (rl-translatef ;pos)
+
+                                 (rl-translatef (* 2.5 0.4) 0 0)
+
+                                 (rl-rotatef rot 0 1 0)
+
+                                 (loop [i :range [0 5]]
+
+                                   (draw-cube-texture
+                                     (in images :bar)
+
+                                     [(* i -0.4) 0 0]
+
+                                     0.1
+                                     2
+                                     0.1
+
+                                     (if (and close
+                                              (self :walls))
+                                       :white
+                                       :gray))))
+
+                               (when (and close
+                                          (self :walls)
+                                          (= :touch (get-in player [:attack-state :kind])))
+                                 (if (get-in player [:inventory :lockpick])
+                                   (do
+                                     (put-in player [:inventory :lockpick] nil)
+
+                                     (flash-text
+                                       ``
+Let's see...
+``
+                                       (/ mw 2)
+                                       (/ mh 1.5)
+                                       24
+                                       :player-says)
+
+                                     (anim
+                                       (loop [_ :range [0 180]]
+                                         (yield nil))
+
+                                       (flash-text
+                                         ``
+Yes!
+``
+                                         (/ mw 2)
+                                         (/ mh 1.5)
+                                         24
+                                         :player-says)
+
+                                       (put self :walls nil)
+
+                                       (loop [i :range [0 60]]
+                                         (print (self :rot))
+                                         (put self :rotation (* 95 (ease-in-out (/ i 59))))
+                                         (yield nil))
+
+                                       (gain-hope player 3)))
+                                   (flash-text
+                                     ``
+It's locked.
+Jeez!
+``
+                                     (/ mw 2)
+                                     (/ mh 1.5)
+                                     24
+                                     :player-says))))
+
+                             #
+)})
+
+             :ok
+
+             #
+))})
+
+
+(put levels :floor-1 floor-1)
+
+
+(def floor0
+  {:spawn-points {:stairs [-5 1 20.5]}
+   :map "resources/floor0.png"
+   :map-texture (images :cubicmap_atlas2)
+
+   :init (fn [self]
+           (print "inited floor0")
+
+           #### trapp
+
+           (array/push notes
+                       @{:dir [1 0 0]
+                         :timer 0
+                         :text `
+I'm free!
+`
+                         :pos [-5 1 21.59]
+
+                         :tick (fn [note mw mh]
+                                 (let [{:pos pos
+                                        :text text
+                                        :dir dir
+                                        :timer timer
+                                        :last-tex last-tex} note
+                                       close (> 0.1 (dist-sqr
+                                                      pos
+                                                      (v+
+                                                        (in player :pos)
+                                                        (v* (cam-rot c)
+                                                            0.5))))
+
+                                       _ (when (neg? timer)
+                                           (put note :timer 5))
+
+                                       tex (if (or (nil? last-tex)
+                                                   (neg? timer))
+                                             (if
+                                               (< 0.3 (math/random))
+                                               (images :trapp)
+                                               (images :trapp))
+
+                                             last-tex)]
+
+                                   (put note :last-tex tex)
+                                   (update note :timer dec)
+
+                                   (draw-cube-texture
+                                     tex
+                                     pos
+                                     1
+                                     2
+                                     0.2
+                                     :white)
+
+                                   (when close
+                                     (anim
+                                       (loop [i :range [0 60]]
+                                         (when (= i 30) (change-level :floor-1 :stairs))
+                                         (yield
+                                           (draw-rectangle
+                                             0
+                                             0
+                                             1000
+                                             1000
+                                             [0 0 0.2
+                                              (math/sin (* math/pi
+                                                           (min 1 (/ i 60))))])))
+
+                                       #
+))))}))})
+
+(put levels :floor0 floor0)
+
+
+(init-level :floor-1 :cell)
+#(init-level :floor0 :stairs)
+
 
 (start-game {:left fullscreen?
              :render (fn [el]
