@@ -258,7 +258,6 @@
       (var delay-pos nil)
 
       (loop [i :range [0 duration]]
-        (log nof-newlines)
         (if (pos? delay)
           (-- delay)
           (do
@@ -347,8 +346,9 @@
 (def start-pos
   (if (dyn 'c)
     (get-camera-position ((dyn 'c) :value))
-    #  [-14.5 1 -14.5] # original start-pos
-    '(-9.02823 1.00828 -2.31514)))
+    [-14.5 1 -14.5] # original start-pos
+    #'(-9.02823 1.00828 -2.31514)
+))
 
 (def start-target
   (if (dyn 'c)
@@ -358,7 +358,7 @@
 (defonce c
   (let [c (camera-3d :target start-target
                      :up [0 1 0]
-                     :fovy 45
+                     :fovy 65
                      :type :perspective
                      :position start-pos)]
 
@@ -480,7 +480,6 @@
 
   points)
 
-
 (defn walls-between
   [o1 o2]
   (var colls @[])
@@ -501,10 +500,10 @@
 
 (defn aquire-target
   [e]
-
   (if (e :aquiring)
     (if-not (empty? (walls-between e (e :aquiring)))
       (do
+        # lost target
         (put e :aquiring nil)
         (put e :aquire-delay nil))
 
@@ -562,6 +561,11 @@
   (if (e :dead)
     (dying-npc e)
     (do
+
+      (when (and (e :target)
+                 ((e :target) :dead))
+        (put e :target nil))
+
       (unless (e :target)
         (aquire-target e))
 
@@ -574,45 +578,54 @@
           (when-let [t (e :target)]
             (put e :target-pos (t :pos)))))
 
-      (let [{:target t
-             :pos pos
-             :speed speed
-             :attack-range attack-range} e
-            distance (when t
-                       (dist (t :pos) pos))]
-        (when-let [tp (e :target-pos)]
-          (update e :dir (fn [dir]
-                           (->
-                             (v+ dir
-                                 (v*
-                                   (v-
-                                     (v- tp pos)
-                                     dir)
-                                   0.1))
-                             normalize)))
+      (unless (e :aquiring)
+        (let [{:target t
+               :pos pos
+               :speed speed
+               :attack-range ar
+               :attack-range-non-player arnp} e
+              attack-range (if (= t player)
+                             ar
+                             arnp)
+              distance (when t
+                         (dist (t :pos) pos))]
+          (when-let [tp (e :target-pos)]
+            (update e :dir (fn [dir]
+                             (->
+                               (v+ dir
+                                   (v*
+                                     (v-
+                                       (v- tp pos)
+                                       dir)
+                                     0.1))
+                               normalize)))
 
-          (put-in e [:dir 1] 0)
+            (put-in e [:dir 1] 0)
 
-          (if (and distance
-                   (e :target)
-                   (< distance attack-range))
-            (unless (get-in e [:target :invul])
-              (:attack e (e :target)))
-            (-> e
-                (put :moved true)
-                (update :pos v+ (v* (e :dir) speed)))))))))
+            (if (and distance
+                     (e :target)
+                     (< distance attack-range))
+              (unless (get-in e [:target :invul])
+                (:attack e (e :target)))
+              (-> e
+                  (put :moved true)
+                  (update :pos v+ (v* (e :dir) speed))))))))))
 
 (def rat
   @{:hp 28
     :attack-range 1.5
+    :attack-range-non-player 0.4
     :attack-startup 13
     :attack-recovery 32
 
     :dir @[0 0 0]
 
     :attack (fn [self & args]
-              #TODO: attack code
-              (put-in self [:attack-state :input] :try-attack))
+              (def {:target target} self)
+              (when target
+                (if (target :eatable?)
+                  (put-in self [:attack-state :input] :try-eat)
+                  (put-in self [:attack-state :input] :try-attack))))
     :speed 0.04
     :radius 0.15
     :blink 0
@@ -784,13 +797,13 @@
                 :dir [0 0 1]
                 :timer 0
                 :text `
-The rats are going crazy.
-We must do something.
+These rats are too scary. :(
+We've gotta do something.
  - Todd
 `
-                :pos [-14.5
+                :pos [-10.41
                       1
-                      -15.59]})
+                      -12.5]})
 
   (array/push notes
               @{:tick handle-note
@@ -805,6 +818,73 @@ It smells so good.
                 :pos [-5.41
                       1
                       -9]})
+
+  #### trapp
+
+  (array/push notes
+              @{:dir [1 0 0]
+                :timer 0
+                :text `
+I'm free!
+`
+                :pos [-10.5
+                      1
+                      14.599]
+
+                :tick (fn [note mw mh]
+                        (let [{:pos pos
+                               :text text
+                               :dir dir
+                               :timer timer
+                               :last-tex last-tex} note
+                              close (> 0.1 (dist-sqr
+                                             pos
+                                             (v+
+                                               (in player :pos)
+                                               (v* (cam-rot c)
+                                                   0.5))))
+
+                              _ (when (neg? timer)
+                                  (put note :timer 5))
+
+                              tex (if (or (nil? last-tex)
+                                          (neg? timer))
+                                    (if
+                                      (< 0.3 (math/random))
+                                      (images :trapp)
+                                      (images :trapp))
+
+                                    last-tex)]
+
+                          (put note :last-tex tex)
+                          (update note :timer dec)
+
+                          (draw-cube-texture
+                            tex
+                            pos
+                            1
+                            2
+                            0.2
+                            :white)
+
+                          (when (and close
+                                     (not (note :used)))
+
+                            (put note :used true)
+
+                            (anim
+                              (var i 0)
+                              (forever
+                                (++ i)
+                                (yield
+                                  (draw-rectangle
+                                    0
+                                    0
+                                    1000
+                                    1000
+                                    [0 0 0.2
+                                     (math/sin (* math/pi 0.5
+                                                  (min 1 (/ i 100))))])))))))})
 
   # cabinet
 
@@ -840,9 +920,93 @@ Didn't think I'd see a lockpick again...
                               :player-says))}
                 cabinet))
 
+  # first bars
+  (array/push notes
+              @{:pos [-13.4 1 -14.1]
+
+                :walls [[;(map math/ceil (->map-pos map-w map-h -13.4 -14.1))
+                         1
+                         1]]
+
+                :rotation 0
+
+                :tick
+                (fn [self mw mh]
+                  (let [{:pos pos
+                         :rotation rot} self
+                        close (> 1 (dist-sqr
+                                     pos
+                                     (v+
+                                       (in player :pos)
+                                       (v* (cam-rot c)
+                                           0.5))))]
+
+                    (defer (rl-pop-matrix)
+                      (rl-push-matrix)
+
+                      (rl-translatef ;pos)
+
+                      (rl-translatef 0 0 (* 2.5 0.2))
+
+                      (rl-rotatef rot 0 1 0)
+
+                      (loop [i :range [0 5]]
+
+                        (draw-cube-texture
+                          (in images :bar)
+
+                          [0 0 (* i -0.2)]
+
+                          0.1
+                          2
+                          0.1
+
+                          (if (and (self :walls) close)
+                            :white
+                            :gray))))
+
+                    (when (and close
+                               (self :walls)
+                               (= :touch (get-in player [:attack-state :kind])))
+
+                      (do
+                        (put-in player [:inventory :lockpick] nil)
+
+                        (flash-text
+                          ``
+It's not even locked...
+``
+                          (/ mw 2)
+                          (/ mh 1.5)
+                          24
+                          :player-says)
+
+                        (anim
+                          (loop [_ :range [0 10]]
+                            (yield nil))
+
+                          (put self :walls false)
+
+                          (loop [i :range [0 60]]
+                            (print (self :rot))
+                            (put self :rotation (* 95 (ease-in-out (/ i 59))))
+                            (yield nil))
+
+                          (gain-hope player 1)))))
+
+                  #
+)})
+
   # bars
   (array/push notes
               @{:pos [-10.7 1 0]
+
+                :walls [[;(map math/ceil (->map-pos map-w map-h -10 0))
+                         1
+                         1]
+                        [;(map math/ceil (->map-pos map-w map-h -11 0))
+                         1
+                         1]]
 
                 :rotation 0
 
@@ -888,6 +1052,8 @@ Didn't think I'd see a lockpick again...
                       (if (get-in player [:inventory :lockpick])
                         (do
                           (put-in player [:inventory :lockpick] nil)
+
+                          (put self :walls nil)
 
                           (flash-text
                             ``
@@ -939,72 +1105,14 @@ Jeez!
 (varonce last-coll nil)
 
 
-(defn handle-non-wall-coll
-  [o o2]
-  (when (circle-circle?
-          (in o :pos) (in o :radius)
-          (in o2 :pos) (in o2 :radius))
-    (let [[ox oy oz] (in o :pos)
-          distance (log "dist: " (dist (in o :pos) (in o2 :pos)))
-          to-move (log "to move: " (- (+ (in o :radius)
-                                         (in o2 :radius))
-                                      distance))]
-      #(tracev distance)
-      (def angle (normalize (v- (in o :pos) (in o2 :pos))))
-      (log "angle: " angle)
-      (if (= o player)
-        (set-camera-position c
-                             (v+ (get-camera-position c) (v* angle to-move)))
-        (update o :pos v+ (v* angle to-move))))))
-
-
-(defn tick
-  [el]
-  (def [x y z] (player :pos))
-  (def attack-kind (get-in player [:attack-state :kind]))
-
-  (when (el :focused?)
-    (when (or (= attack-kind :shoot-full)
-              (= attack-kind :shoot-half)) # (mouse-button-released? 0)
-      (def b @{:pos (array ;(player :pos))
-               :sprite bullet
-               :damage 13
-               :gravity 0
-               :dir (cam-rot c)
-               :speed (if (= attack-kind :shoot-full)
-                        0.25
-                        0.125)
-               :color :green})
-
-      (update b :pos v+ (v* (cam-rot c) 1))
-
-      (update-in b [:pos 1] - 0.07)
-      (array/push bullets b)))
-
-  (loop [e :in enemies]
-    (:update e)
-
-    (loop [e2 :in enemies
-           :when (not= e e2)]
-      (handle-non-wall-coll e e2)))
-
-  (var i 0)
-
-  (while (< i (length bullets))
-
-    (if ((in bullets i) :dead)
-      (++ i) ##1 # (array/remove bullets i)
-      (++ i))))
-
 (defn handle-wall-coll
   [o o-rec wall]
-
   (def radius (in o :radius))
+
   (when (check-collision-circle-rec
           o-rec
           radius
           wall)
-
     (update o :collision/nof-hits inc)
 
     (let [[ox oy oz] (in o :pos)]
@@ -1030,6 +1138,203 @@ Jeez!
         [(+ ox x-diff) oy oz]
         # "up"
         [ox oy (- oz z-diff)]))))
+
+(defn handle-non-wall-coll
+  [o o2]
+  (when (circle-circle?
+          (in o :pos) (in o :radius)
+          (in o2 :pos) (in o2 :radius))
+    (let [[ox oy oz] (in o :pos)
+          distance (dist (in o :pos) (in o2 :pos))
+          to-move (- (+ (in o :radius)
+                        (in o2 :radius))
+                     distance)]
+      #(tracev distance)
+      (def angle (normalize (v- (in o :pos) (in o2 :pos))))
+
+      (if (= o player)
+        (set-camera-position c
+                             (v+ (get-camera-position c) (v* angle to-move)))
+        (update o :pos v+ (v* angle to-move))))))
+
+(defn default-bullet-tick
+  [b]
+
+  (def {:pos pos
+        :dir dir
+        :speed speed
+        :gravity gravity
+        :sprite sprite
+        :stopped stopped
+        :scale scale} b)
+
+  (unless stopped
+    (update b :pos v+ (v* dir speed))
+    (update-in b [:pos 1] - gravity)
+    (update b :gravity + 0.002))
+
+  (draw-billboard c sprite pos scale :white))
+
+
+(defn tick
+  [el]
+  (def [x y z] (player :pos))
+  (def attack-kind (get-in player [:attack-state :kind]))
+
+  (when (el :focused?)
+    (when (or (= attack-kind :shoot-full)
+              (= attack-kind :shoot-half)) # (mouse-button-released? 0)
+      (def b @{:pos (array ;(player :pos))
+               :sprite bullet
+               :damage 13
+               :gravity 0
+
+               :collision/nof-hits 0
+
+               :dir (cam-rot c)
+               :speed (if (= attack-kind :shoot-full)
+                        0.25
+                        0.125)
+
+               :tick
+               (fn [b]
+                 (def {:pos pos} b)
+                 (cond
+                   (b :dead)
+                   (draw-billboard c (get-render-texture explo/rt)
+                                   pos 0.5 :white)
+
+                   (neg? (pos 1))
+                   (put b :dead true)
+
+                   (default-bullet-tick b)))
+
+               :hit (fn [b kind &opt obj]
+                      (case kind
+                        :enemy
+                        (do
+                          (update obj :hp - (b :damage))
+                          (when (>= 0 (obj :hp))
+                            (put obj :dead true))
+                          (put obj :hit 20)
+                          (put obj :blink-timer 5)
+                          (put b :dead true))
+
+                        :wall
+                        (put b :dead true)))})
+
+      (update b :pos v+ (v* (cam-rot c) 1))
+
+      (update-in b [:pos 1] - 0.07)
+      (array/push bullets b))
+
+    (when (or (= attack-kind :throw))
+      (def bread @{:pos (array ;(player :pos))
+                   :sprite (images :bread)
+                   :gravity 0
+                   :scale 0.5
+                   :dir (cam-rot c)
+                   :speed 0.04
+
+                   :collision/nof-hits 0
+
+                   :radius 0.5
+
+                   :smell-radius 5
+
+                   :eatable? true
+
+                   :tick
+                   (fn [b]
+                     (def {:pos pos
+                           :smell-radius smell-radius} b)
+
+                     (unless (b :dead)
+                       (let [[bx by bz] pos
+                             b-pos [bx bz]]
+
+                         (loop [e :in enemies
+                                :let [{:pos pos
+                                       :radius e-radius
+                                       :target target
+                                       :aquiring aquiring} e
+                                      [ex ey ez] pos
+                                      e-pos [ex ez]]
+                                :when (not (e :dead))]
+                           (unless (or (= aquiring b)
+                                       (= target b)
+                                       (get target :eatable?))
+                             (when (circle-circle? e-pos
+                                                   e-radius
+                                                   b-pos
+                                                   smell-radius)
+                               (put e :aquiring b)
+                               (put e :aquire-delay 10)
+                               (put e :target nil))))))
+
+                     (cond
+                       (b :dead)
+                       (do #dead
+)
+
+                       (neg? (pos 1))
+                       (do
+                         (put b :stopped true)
+                         (put-in b [:pos 1] 0))
+
+                       (default-bullet-tick b)))
+
+                   :hit (fn [b kind &opt obj]
+                          (case kind
+                            :player
+                            (when (b :stopped)
+                              (put b :dead true)
+
+                              (flash-text
+                                ``
+The bread is dirty...
+                       ``
+                                (/ render-width 2)
+                                (/ render-height 1.5)
+                                24
+                                :player-says)
+
+                              (put-in player [:inventory :bread] true))
+
+                            :enemy
+                            (do # eating bread
+)
+
+                            :wall
+                            (let [[bx by bz] (b :pos)]
+                              (handle-wall-coll b
+                                                (->map-pos map-w map-h bx bz)
+                                                obj)
+
+                              (put b :dir [0 1 0]))))})
+
+      (update bread :pos v+ (v* (cam-rot c) 0.3))
+
+      (update-in bread [:pos 1] - 0.07)
+
+      (put-in player [:inventory :bread] nil)
+
+      (array/push bullets bread)))
+
+  (loop [e :in enemies]
+    (:update e)
+
+    (loop [e2 :in enemies
+           :when (not= e e2)]
+      (handle-non-wall-coll e e2)))
+
+  (var i 0)
+
+  (while (< i (length bullets))
+    (if ((in bullets i) :dead)
+      (++ i) ##1 # (array/remove bullets i)
+      (++ i))))
+
 
 (defn handle-map-collisions
   []
@@ -1085,7 +1390,6 @@ Jeez!
     #
     ## end of drawing map
 
-    (put player :collision/nof-hits 0)
 
     (loop [e :in enemies]
       (put e :collision/nof-hits 0))
@@ -1099,16 +1403,16 @@ Jeez!
 
       (let [bullet-size 0.1]
         (loop [b :in bullets
-               :let [{:pos pos} b
+               :let [{:pos pos
+                      :radius radius} b
                      [bx by bz] pos]
                :when
                (check-collision-circle-rec
                  (->map-pos map-w map-h bx bz)
-                 bullet-size
-
+                 radius
                  tile-rec)]
 
-          (put b :dead true)))
+          (:hit b :wall tile-rec)))
 
       (when-let [new-pos (handle-wall-coll
                            player
@@ -1141,14 +1445,7 @@ Jeez!
                             (* scale y)
                             scale
                             scale
-                            :green)))))
-
-    (when (< 2 (player :collision/nof-hits))
-      (set-camera-position c (player :last-pos)))
-
-    (loop [e :in enemies]
-      (when (< 2 (in e :collision/nof-hits))
-        (put e :pos (in e :last-pos))))))
+                            :green)))))))
 
 (def walk-sound-fib (fiber/new walking-sound))
 
@@ -1179,11 +1476,14 @@ Jeez!
                      (= last-state :touch-start))
                 :touch
 
-                (or (and
-                      (= input-state :touch)
-                      (nil? last-state))
+                (or (and (= input-state :touch)
+                         (nil? last-state))
+                    (and (= input-state :touch)
+                         (= :moving last-state))
                     (= last-state :touch-start))
                 :touch-start
+
+                (player :moved?) :moving
 
                 nil)
 
@@ -1225,6 +1525,117 @@ Jeez!
           (- mw (* scale w)))
 
         render-y (case state
+                   :moving (- mh (* scale h)
+                              -30
+                              (* 30
+                                 (math/sin
+                                   (* 2 math/pi (/ (mod duration 40) 40)))))
+
+                   nil (- mh (* scale h)
+                          -5
+                          (* 5
+                             (math/sin
+                               (* math/pi (/ (mod duration 60) 60)))))
+
+                   (- mh (* scale h)))]
+
+    (draw-texture-ex
+      t
+      [(* render-scale render-x)
+       (* render-y render-scale)]
+      0
+      (* render-scale scale)
+      :white)))
+
+(defn render-holding
+  [{:focused? focused?
+    :width mw
+    :height mh}]
+
+  (set render-width mw)
+  (set render-height mh)
+
+  (let [as (in player :attack-state)
+        last-state (get-in player [:attack-state :kind])
+        input-state (cond
+                      (and focused?
+                           (mouse-button-pressed? 0))
+                      :throw
+
+                      nil)
+
+        state (cond
+                (or (and (< (in as :duration) 7)
+                         (= last-state :throw-end))
+                    (= last-state :throw))
+                :throw-end
+
+                (and (> (in as :duration) 7)
+                     (= last-state :throw-start))
+                :throw
+
+                (or (and
+                      (= input-state :throw)
+                      (nil? last-state))
+                    (and
+                      (= input-state :throw)
+                      (= last-state :moving))
+                    (= last-state :throw-start))
+                :throw-start
+
+                (player :moved?) :moving
+
+                nil)
+
+        _ (if (= state last-state)
+            (update as :duration inc)
+            (-> as
+                (put :duration 0)
+                (put :kind state)))
+
+        duration (in as :duration)
+
+        tex-kw (cond
+                 (= state :throw-end)
+                 :hand-throw
+
+                 (= state :throw)
+                 :hand-throw
+
+                 #                 (and (> duration 4)
+                 #                      (= state :throw-start))
+                 #                 :hand-throw
+
+                 :hand-bread)
+
+        t (in images tex-kw)
+        scale (case state
+                :throw-start 7
+                :throw 7
+                :throw-end 8
+
+                6)
+
+        [w h] (texture-dimensions t)
+
+        render-x
+        (case state
+          :throw1236
+          (- (- (* 0.5 mw) (* 0.5 (* scale w)))
+             (* (- (- (* 0.5 mw) (* 0.5 (* scale w)))
+                   (- mw (* scale w)))
+                (- 1
+                   (ease-in-expo (/ (min duration 1) 1)))))
+
+          (- mw (* scale w)))
+
+        render-y (case state
+                   :moving (- mh (* scale h)
+                              -30
+                              (* 30
+                                 (math/sin
+                                   (* 2 math/pi (/ (mod duration 40) 40)))))
+
                    nil (- mh (* scale h)
                           -5
                           (* 5
@@ -1409,6 +1820,8 @@ Jeez!
     (update-camera c)
     (put player :pos (get-camera-position c)))
 
+  (put player :collision/nof-hits 0)
+
   (put player :moved?
        (not= (in player :pos)
              (in player :last-pos)))
@@ -1417,6 +1830,8 @@ Jeez!
     (resume walk-sound-fib))
 
   (clear-background :white)
+
+  (handle-map-collisions)
 
   (tick el)
 
@@ -1430,38 +1845,59 @@ Jeez!
 
     (var coll false)
 
-    (log (player :pos))
+    # (log (player :pos))
 
-    (loop [n :in notes]
+    (let [{:pos pos :radius p-radius} player
+          [px py pz] pos
+          p-pos [px pz]]
+      (loop [n :in notes]
+        (when (n :radius)
+          (handle-non-wall-coll player n))
 
-      (when (n :radius)
-        (handle-non-wall-coll player n))
+        (when-let [walls (n :walls)]
+          (let [{:pos pos} n]
 
-      (:tick n mw mh))
+            (loop [w :in walls]
+              (when-let [new-pos (handle-wall-coll player
+                                                   (->map-pos map-w map-h px pz)
+                                                   w)]
 
-    (loop [b :in bullets
-           :when (not (b :dead))
-           :let [{:damage damage
-                  :pos pos} b
-                 [bx by bz] pos
-                 b-pos [bx
-                        bz]]]
-      (loop [e :in enemies
+                (set-camera-position c new-pos)))))
+
+        (:tick n mw mh))
+
+      (loop [b :in bullets
+             :when (not (b :dead))
              :let [{:pos pos
-                    :radius e-radius} e
-                   [ex ey ez] pos
-                   e-pos [ex ez]]
-             :when (not (e :dead))]
-        (when (circle-circle? e-pos
-                              e-radius
+                    :radius b-radius} b
+                   [bx by bz] pos
+                   b-pos [bx
+                          bz]]]
+
+        (when (circle-circle? p-pos
+                              p-radius
                               b-pos
-                              size)
-          (update e :hp - damage)
-          (when (>= 0 (e :hp))
-            (put e :dead true))
-          (put e :hit 20)
-          (put e :blink-timer 5)
-          (put b :dead true))))
+                              b-radius)
+          (:hit b :player player))
+
+        (loop [e :in enemies
+               :let [{:pos pos
+                      :radius e-radius} e
+                     [ex ey ez] pos
+                     e-pos [ex ez]]
+               :when (not (e :dead))]
+          (when (circle-circle? e-pos
+                                e-radius
+                                b-pos
+                                b-radius)
+            (:hit b :enemy e)))))
+
+    (when (< 2 (player :collision/nof-hits))
+      (set-camera-position c (player :last-pos)))
+
+    (loop [e :in enemies]
+      (when (< 2 (in e :collision/nof-hits))
+        (put e :pos (in e :last-pos))))
 
     (when (player :invul)
       (update player :invul dec)
@@ -1570,6 +2006,9 @@ Jeez!
                       (= :try-attack (in as :input))
                       :attack-startup
 
+                      (= :try-eat (in as :input))
+                      :eating
+
                       (e :moved)
                       :walking
 
@@ -1583,6 +2022,9 @@ Jeez!
 
               rat-tex
               (cond
+                (= state :eating)
+                (images :rat-rest)
+
                 (e :dead)
                 (images :rat-dead)
 
@@ -1623,6 +2065,9 @@ Jeez!
                       0.5)
 
               y-offset (case state
+                         :eating
+                         (* 0.01
+                            (math/sin (* math/pi (/ (mod (as :duration) 30) 30))))
 
                          :attack-hit 0.3
                          :recovery
@@ -1659,21 +2104,7 @@ Jeez!
                   :gravity gravity
                   :speed speed} b]]
 
-      (cond
-        (b :dead)
-        (draw-billboard c (get-render-texture explo/rt)
-                        pos 0.5 :white)
-
-        (neg? (pos 1))
-        (put b :dead true)
-
-        (do
-          (update b :pos v+ (v* dir speed))
-          (update-in b [:pos 1] - gravity)
-          (update b :gravity + 0.002)
-          (draw-billboard c sprite pos 0.1 :white)))))
-
-  (handle-map-collisions)
+      (:tick b)))
 
   # aim-dot
   (comment
@@ -1693,9 +2124,22 @@ Jeez!
 
   # (draw-fps 600 0)
 
+
   (run-animations anims)
 
-  (render-hand el)
+  (when (and (player :holding)
+             (not (get-in player [:inventory (player :holding)])))
+    (put player :holding nil))
+
+  (when (or (not (zero? (get-mouse-wheel-move)))
+            (key-pressed? :i))
+    (if (player :holding)
+      (put player :holding nil)
+      (put player :holding (first (keys (player :inventory))))))
+
+  (if (= :bread (player :holding))
+    (render-holding el)
+    (render-hand el))
 
   #(render-slangbella el)
 
