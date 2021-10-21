@@ -70,7 +70,7 @@
 (defn sound
   [k]
   (let [s (in sounds k)]
-    (play-sound s)
+    #(play-sound s)
     s))
 
 (def steps
@@ -336,11 +336,16 @@
 
 
 (defonce player @{:inventory @{}
+                  :holding-i 0
                   :hope 5
                   :recovery-duration 23
                   :radius 0.5
                   :attack-state @{:duration 0}
                   :hp 38})
+
+(put player :dead false)
+(put player :hp 38)
+(put player :invul nil)
 
 
 (var notes @[])
@@ -513,24 +518,29 @@
 (defn aquire-target
   [e]
   (if (e :aquiring)
-    (if-not (empty? (walls-between e (e :aquiring)))
-      (do
-        # lost target
-        (put e :aquiring nil)
-        (put e :aquire-delay nil))
-
-      (do
-        (update e :aquire-delay dec)
-
-        (when (= 112 (e :aquire-delay))
-          (sound :notice1))
-
-        (when (neg? (e :aquire-delay))
-          (put e :target (e :aquiring))
+    (do
+      (print "aquiring!")
+      (if-not (empty? (walls-between e (e :aquiring)))
+        (do
+          # lost target
+          (print "lost target...")
           (put e :aquiring nil)
-          (put e :aquire-delay nil)
+          (put e :aquire-delay nil))
 
-          (sound :running))))
+        (do
+          (update e :aquire-delay dec)
+
+          (when (= 112 (e :aquire-delay))
+            (sound :notice1))
+
+          (when (neg? (log (e :aquire-delay)))
+
+            (print "whoa!")
+            (put e :target (e :aquiring))
+            (put e :aquiring nil)
+            (put e :aquire-delay nil)
+
+            (sound :running)))))
 
     (when (empty? (walls-between e player))
       (put e :aquiring player)
@@ -580,6 +590,7 @@
 
       (when (and (e :target)
                  ((e :target) :dead))
+        (print "target dead")
         (put e :target nil))
 
       (unless (e :target)
@@ -843,6 +854,7 @@
       (if (= o player)
         (set-camera-position c
                              (v+ (get-camera-position c) (v* angle to-move)))
+
         (update o :pos v+ (v* angle to-move))))))
 
 (defn default-bullet-tick
@@ -876,6 +888,9 @@
                :sprite (images :bullet)
                :damage 13
                :gravity 0
+
+               :radius 0.05
+               :scale 0.3
 
                :collision/nof-hits 0
 
@@ -1014,7 +1029,9 @@ The bread is dirty...
 
     (loop [e2 :in enemies
            :when (not= e e2)]
-      (handle-non-wall-coll e e2)))
+      (handle-non-wall-coll e e2))
+    #
+)
 
   (var i 0)
 
@@ -1530,305 +1547,330 @@ The bread is dirty...
     (begin-mode-3d c)
 
     (draw-model map-model map-pos 1 :white)
+    (do comment
+      (var coll false)
 
-    (var coll false)
+      # (log (player :pos))
 
-    # (log (player :pos))
+      (let [{:pos pos :radius p-radius} player
+            [px py pz] pos
+            p-pos [px pz]]
+        (loop [n :in notes]
+          (when (n :radius)
+            (handle-non-wall-coll player n))
 
-    (let [{:pos pos :radius p-radius} player
-          [px py pz] pos
-          p-pos [px pz]]
-      (loop [n :in notes]
-        (when (n :radius)
-          (handle-non-wall-coll player n))
+          (when-let [walls (n :walls)]
+            (let [{:pos pos} n]
+              (loop [w :in walls]
+                (loop [e :in enemies
+                       :when (and (not (e :dead))
+                                  (e :moved))
+                       :let [[ex _ ez] (e :pos)]]
 
-        (when-let [walls (n :walls)]
-          (let [{:pos pos} n]
+                  (when-let [new-pos (handle-wall-coll e
+                                                       (->map-pos map-w map-h ex ez)
+                                                       w)]
 
-            (loop [w :in walls]
-              (when-let [new-pos (handle-wall-coll player
-                                                   (->map-pos map-w map-h px pz)
-                                                   w)]
+                    (put e :pos new-pos))
 
-                (set-camera-position c new-pos)))))
+                  #
+)
 
-        (:tick n mw mh))
+                (when-let [new-pos (handle-wall-coll player
+                                                     (->map-pos map-w map-h px pz)
+                                                     w)]
 
-      (loop [b :in bullets
-             :when (not (b :dead))
-             :let [{:pos pos
-                    :radius b-radius} b
-                   [bx by bz] pos
-                   b-pos [bx
-                          bz]]]
+                  (set-camera-position c new-pos)))))
 
-        (when (circle-circle? p-pos
-                              p-radius
-                              b-pos
-                              b-radius)
-          (:hit b :player player))
+          (:tick n mw mh))
 
-        (loop [e :in enemies
+        (loop [b :in bullets
+               :when (not (b :dead))
                :let [{:pos pos
-                      :radius e-radius} e
-                     [ex ey ez] pos
-                     e-pos [ex ez]]
-               :when (not (e :dead))]
-          (when (circle-circle? e-pos
-                                e-radius
+                      :radius b-radius} b
+                     [bx by bz] pos
+                     b-pos [bx bz]]]
+
+          (when (circle-circle? p-pos
+                                p-radius
                                 b-pos
                                 b-radius)
-            (:hit b :enemy e)))))
+            (:hit b :player player))
 
-    (when (< 2 (player :collision/nof-hits))
-      (set-camera-position c (player :last-pos)))
+          (loop [e :in enemies
+                 :let [{:pos pos
+                        :radius e-radius} e
+                       [ex ey ez] pos
+                       e-pos [ex ez]]
+                 :when (not (e :dead))]
+            (when (and (< by 0.4)
+                       (circle-circle? e-pos
+                                       e-radius
+                                       b-pos
+                                       b-radius))
+              (:hit b :enemy e)))))
 
-    (loop [e :in enemies]
-      (when (< 2 (in e :collision/nof-hits))
-        (put e :pos (in e :last-pos))))
+      (when (< 2 (player :collision/nof-hits))
+        (set-camera-position c (player :last-pos)))
 
-    (when (player :invul)
-      (update player :invul dec)
+      (loop [e :in enemies]
+        (when (< 2 (in e :collision/nof-hits))
+          (put e :pos (in e :last-pos)))
 
-      (when (neg? (player :invul))
-        (put player :invul nil)))
+        (put e :last-pos (e :pos)))
 
-    (let [player-pos (get-camera-position c)
-          [px py pz] player-pos
-          player-pos-2d [px pz]]
+      (when (player :invul)
+        (update player :invul dec)
 
-      (loop [e :in (sort-by
-                     |(- (dist-sqr player-pos (in $ :pos)))
-                     enemies)
-             :let [{:pos pos
-                    :hit hit
-                    :blink blink
-                    :radius e-radius
-                    :attack-range attack-range} e
-                   [ex ey ez] pos
-                   e-pos [ex ez]]]
+        (when (neg? (player :invul))
+          (put player :invul nil)))
 
-        (when (and
-                (= :attack-hit (get-in e [:attack-state :state]))
-                (not (player :invul))
-                (circle-circle? e-pos
-                                attack-range
-                                player-pos-2d
-                                (player :radius)))
+      (let [player-pos (get-camera-position c)
+            [px py pz] player-pos
+            player-pos-2d [px pz]]
 
-          (put player :invul 60)
+        (loop [e :in (sort-by
+                       |(- (dist-sqr player-pos (in $ :pos)))
+                       enemies)
+               :let [{:pos pos
+                      :hit hit
+                      :blink blink
+                      :radius e-radius
+                      :attack-range attack-range} e
+                     [ex ey ez] pos
+                     e-pos [ex ez]]]
 
-          (update player :hp - 12)
-          (sound :scream)
+          (when (and
+                  (= :attack-hit (get-in e [:attack-state :state]))
+                  (not (player :invul))
+                  (circle-circle? e-pos
+                                  attack-range
+                                  player-pos-2d
+                                  (player :radius)))
 
-          (if (>= 0 (player :hp))
-            (do
-              (put player :dead true)
-              (put player :invul 9999999999)
+            (put player :invul 60)
+
+            (update player :hp - 12)
+            (sound :scream)
+
+            (if (>= 0 (player :hp))
+              (do
+                (put player :dead true)
+                (put player :invul 9999999999)
+
+                (anim
+                  (let [dur 10]
+                    (loop [f :range [0 dur]
+                           :let [p (/ f (dec dur))
+                                 p (ease-out-expo p)]]
+                      (yield (draw-rectangle
+                               0
+                               0
+                               1000
+                               1000
+                               [1 0 0 p])))
+
+                    (forever
+                      (death-screen mw mh)
+                      (yield :ok)))))
 
               (anim
-                (let [dur 10]
+                (let [dur 30]
+                  (loop [_ :range [0 10]]
+                    (yield nil))
+
                   (loop [f :range [0 dur]
                          :let [p (/ f (dec dur))
-                               p (ease-out-expo p)]]
+                               p (- 1 (ease-out-expo p))]]
                     (yield (draw-rectangle
                              0
                              0
                              1000
                              1000
-                             [1 0 0 p])))
+                             [1 0 0 p])))))))
 
-                  (forever
-                    (death-screen mw mh)
-                    (yield :ok)))))
+          (if-not (-?> hit pos?)
+            (do
+              (put e :blink nil)
+              (put e :hit nil))
+            (do
+              (update e :blink-timer dec)
 
-            (anim
-              (let [dur 30]
-                (loop [_ :range [0 10]]
-                  (yield nil))
+              (when (neg? (e :blink-timer))
+                (update e :blink not)
+                (put e :blink-timer 5))
 
-                (loop [f :range [0 dur]
-                       :let [p (/ f (dec dur))
-                             p (- 1 (ease-out-expo p))]]
-                  (yield (draw-rectangle
-                           0
-                           0
-                           1000
-                           1000
-                           [1 0 0 p])))))))
+              (update e :hit dec)))
 
-        (if-not (-?> hit pos?)
-          (do
-            (put e :blink nil)
-            (put e :hit nil))
-          (do
-            (update e :blink-timer dec)
+          (let [as (in e :attack-state)
+                last-state (in as :last-state)
 
-            (when (neg? (e :blink-timer))
-              (update e :blink not)
-              (put e :blink-timer 5))
+                state (cond
+                        (and (> (e :attack-recovery) (as :duration))
+                             (= last-state :recovery))
+                        :recovery
 
-            (update e :hit dec)))
+                        (= last-state :attack-hit)
+                        :recovery
 
-        (let [as (in e :attack-state)
-              last-state (in as :last-state)
+                        (and
+                          (<= (e :attack-startup) (as :duration))
+                          (= last-state :attack-startup))
+                        :attack-hit
 
-              state (cond
-                      (and (> (e :attack-recovery) (as :duration))
-                           (= last-state :recovery))
-                      :recovery
+                        (= last-state :attack-startup)
+                        :attack-startup
 
-                      (= last-state :attack-hit)
-                      :recovery
+                        (= :try-attack (in as :input))
+                        :attack-startup
 
-                      (and
-                        (<= (e :attack-startup) (as :duration))
-                        (= last-state :attack-startup))
-                      :attack-hit
+                        (= :try-eat (in as :input))
+                        :eating
 
-                      (= last-state :attack-startup)
-                      :attack-startup
+                        (e :moved)
+                        :walking
 
-                      (= :try-attack (in as :input))
-                      :attack-startup
+                        :neutral)
 
-                      (= :try-eat (in as :input))
-                      :eating
+                _ (if (= last-state state)
+                    (update as :duration inc)
+                    (-> as
+                        (put :duration 0)
+                        (put :state state)))
 
-                      (e :moved)
-                      :walking
+                rat-tex
+                (cond
+                  (= state :eating)
+                  (images :rat-rest)
 
-                      :neutral)
+                  (e :dead)
+                  (images :rat-dead)
 
-              _ (if (= last-state state)
-                  (update as :duration inc)
-                  (-> as
-                      (put :duration 0)
-                      (put :state state)))
+                  (and (< 5 (as :duration))
+                       (= state :recovery))
+                  (images :rat-recovery)
 
-              rat-tex
-              (cond
-                (= state :eating)
-                (images :rat-rest)
+                  (or
+                    (= state :recovery)
+                    (= state :attack-hit))
+                  (images :rat-attack-hit)
 
-                (e :dead)
-                (images :rat-dead)
+                  (= state :attack-startup)
+                  (images :rat-attack-startup)
 
-                (and (< 5 (as :duration))
-                     (= state :recovery))
-                (images :rat-recovery)
+                  (e :moved)
+                  (if (< 10 (mod (as :duration) 20))
+                    (images :rat-walk-right)
+                    (images :rat-walk-left))
 
-                (or
-                  (= state :recovery)
-                  (= state :attack-hit))
-                (images :rat-attack-hit)
+                  (images :rat-neutral))
 
-                (= state :attack-startup)
-                (images :rat-attack-startup)
+                scale (case state
+                        :attack-hit 1.6
 
-                (e :moved)
-                (if (< 10 (mod (as :duration) 20))
-                  (images :rat-walk-right)
-                  (images :rat-walk-left))
+                        :recovery
+                        (- 1.5
+                           (* 1
+                              (ease-out-expo
+                                (max 0 (/ (- (as :duration) 8) (- (e :attack-recovery) 8))))))
 
-                (images :rat-neutral))
+                        :attack-startup
+                        (+ 0.5
+                           (* 1
+                              (ease-out-expo
+                                (/ (as :duration) (e :attack-startup)))))
 
-              scale (case state
-                      :attack-hit 1.6
+                        0.5)
 
-                      :recovery
-                      (- 1.5
-                         (* 1
-                            (ease-out-expo
-                              (max 0 (/ (- (as :duration) 8) (- (e :attack-recovery) 8))))))
+                y-offset (case state
+                           :eating
+                           (* 0.01
+                              (math/sin (* math/pi (/ (mod (as :duration) 30) 30))))
 
-                      :attack-startup
-                      (+ 0.5
-                         (* 1
-                            (ease-out-expo
-                              (/ (as :duration) (e :attack-startup)))))
+                           :attack-hit 0.3
+                           :recovery
+                           (- 0.3
+                              (* 0.3
+                                 (ease-out-expo
+                                   (/ (as :duration) (e :attack-recovery)))))
 
-                      0.5)
+                           :attack-startup
+                           (+ 0
+                              (* 0.3
+                                 (ease-out-expo
+                                   (/ (as :duration) (e :attack-startup))))))]
 
-              y-offset (case state
-                         :eating
-                         (* 0.01
-                            (math/sin (* math/pi (/ (mod (as :duration) 30) 30))))
+            (put as :last-state state)
 
-                         :attack-hit 0.3
-                         :recovery
-                         (- 0.3
-                            (* 0.3
-                               (ease-out-expo
-                                 (/ (as :duration) (e :attack-recovery)))))
+            (draw-billboard c
+                            rat-tex
+                            (if y-offset
+                              [(pos 0)
+                               (+ y-offset (pos 1))
+                               (pos 2)]
 
-                         :attack-startup
-                         (+ 0
-                            (* 0.3
-                               (ease-out-expo
-                                 (/ (as :duration) (e :attack-startup))))))]
+                              pos)
+                            scale
+                            (if blink
+                              :red
+                              :white)))))
 
-          (put as :last-state state)
+      (loop [b :in bullets
+             :let [{:pos pos
+                    :sprite sprite
+                    :dir dir
+                    :gravity gravity
+                    :speed speed} b]]
 
-          (draw-billboard c
-                          rat-tex
-                          (if y-offset
-                            [(pos 0)
-                             (+ y-offset (pos 1))
-                             (pos 2)]
+        (:tick b)))
 
-                            pos)
-                          scale
-                          (if blink
-                            :red
-                            :white)))))
+    # aim-dot
+    (comment
+      (draw-rectangle (dec (* 0.5 mw))
+                      (dec (* 0.5 mh))
+                      3
+                      3
+                      [0 0 0 0.8])
 
-    (loop [b :in bullets
-           :let [{:pos pos
-                  :sprite sprite
-                  :dir dir
-                  :gravity gravity
-                  :speed speed} b]]
-
-      (:tick b)))
-
-  # aim-dot
-  (comment
-    (draw-rectangle (dec (* 0.5 mw))
-                    (dec (* 0.5 mh))
-                    3
-                    3
-                    [0 0 0 0.8])
-
-    (draw-rectangle (* 0.5 mw)
-                    (* 0.5 mh)
-                    1
-                    1
-                    [1 1 1 0.8])
-    #
-)
-
-  # (draw-fps 600 0)
-
+      (draw-rectangle (* 0.5 mw)
+                      (* 0.5 mh)
+                      1
+                      1
+                      [1 1 1 0.8])
+      #
+))
+  (draw-fps 600 0)
 
   (run-animations anims)
 
   (when (and (player :holding)
              (not (get-in player [:inventory (player :holding)])))
+    (put player :holding-i 0)
     (put player :holding nil))
 
   (when (or (not (zero? (get-mouse-wheel-move)))
             (key-pressed? :i))
-    (if (player :holding)
+    (update player :holding-i inc)
+
+    (cond (> (player :holding-i)
+             (length (player :inventory)))
+      (put player :holding-i 0)
+
+      (neg? (player :holding-i))
+      (put player :holding-i (length (player :inventory))))
+
+    (if (zero? (player :holding-i))
       (put player :holding nil)
-      (put player :holding (first (keys (player :inventory))))))
+      (put player :holding (get (sort (keys (player :inventory))) (dec (player :holding-i))))))
 
-  (if (= :bread (player :holding))
+  (case (player :holding)
+    :bread
     (render-holding el)
+
+    :slingshot
+    (render-slangbella el)
+
     (render-hand el))
-
-  #(render-slangbella el)
-
 
   (put player :last-pos (get-camera-position c))
 
@@ -2269,15 +2311,13 @@ Jeez!
              #
 ))})
 
-
 (put levels :floor-1 floor-1)
 
 
 (def floor-2
-  {:spawn-points {:trap-door [-10.5
-                              1
-                              13.599]}
-   :map "resources/floor-1-map.png"
+  {:spawn-points {:trap-door # [8.41213 1 -4.79485]
+                  [0 1 2]}
+   :map "resources/floor-2-map.png"
    :map-texture (images :cubicmap_atlas2)
 
    :init (fn [self]
@@ -2307,7 +2347,9 @@ Jeez!
 
              (array/push notes
                          (table/setproto
-                           @{:pos [-12.5 0.5 -7.5]
+                           @{:pos [(- x -0.5 (* 0.5 map-w))
+                                   0.5
+                                   (- y -0.5 (* 0.5 map-w))]
                              :content :lockpick
                              :pickup (fn [_ player content]
                                        (flash-text
@@ -2319,6 +2361,178 @@ A lockpick!
                                          24
                                          :player-says))}
                            cabinet)))
+
+           (def breads-map (load-image-1 "resources/floor-2-breads.png"))
+           (def breads-map-pixels (get-image-data breads-map))
+
+           (loop [x :range [0 map-w]
+                  y :range [0 map-h]
+                  :when (and (not= [1 1 1 1]
+                                   (breads-map-pixels (+ (* y map-w)
+                                                         x))))]
+
+             (array/push notes
+                         (table/setproto
+                           @{:pos [(- x -0.5 (* 0.5 map-w))
+                                   0.5
+                                   (- y -0.5 (* 0.5 map-w))]
+                             :content :bread
+                             :pickup (fn [_ player content]
+                                       (flash-text
+                                         ``
+Bread!
+``
+                                         (/ render-width 2)
+                                         (/ render-height 1.5)
+                                         24
+                                         :player-says))}
+                           cabinet)))
+
+           (def slingshots-map (load-image-1 "resources/floor-2-slingshots.png"))
+           (def slingshots-map-pixels (get-image-data slingshots-map))
+
+           (loop [x :range [0 map-w]
+                  y :range [0 map-h]
+                  :when (and (not= [1 1 1 1]
+                                   (slingshots-map-pixels (+ (* y map-w)
+                                                             x))))]
+
+             (array/push notes
+                         (table/setproto
+                           @{:pos [(- x -0.5 (* 0.5 map-w))
+                                   0.5
+                                   (- y -0.5 (* 0.5 map-w))]
+                             :content :slingshot
+                             :pickup (fn [_ player content]
+                                       (flash-text
+                                         ``
+A slingshot!
+``
+                                         (/ render-width 2)
+                                         (/ render-height 1.5)
+                                         24
+                                         :player-says))}
+                           cabinet)))
+
+           (def gates-map (load-image-1 "resources/floor-2-gates.png"))
+           (def gates-map-pixels (get-image-data gates-map))
+
+           (var taken-walls @{})
+
+           (loop [x :range [0 map-w]
+                  y :range [0 map-h]
+                  :when (and (not (taken-walls [x y]))
+                             (not= [1 1 1 1]
+                                   (gates-map-pixels (+ (* y map-w)
+                                                        x))))]
+
+             (var walls @[[x y 1 1]])
+
+             (loop [x2 :range [(max 0 (dec x)) (min map-w (inc x))]
+                    y2 :range [(max 0 (dec y)) (min map-h (inc y))]
+                    :when (not= [1 1 1 1]
+                                (gates-map-pixels (+ (* y2 map-w)
+                                                     x2)))]
+
+               (put taken-walls [x2 y2] true)
+               (array/push walls [x2 y2 1 1]))
+
+             (array/push notes
+                         @{:pos [(- x -0.5 (* 0.5 map-w))
+                                 0.5
+                                 (- y -0.5 (* 0.5 map-w))]
+
+                           :walls walls
+
+                           :rotation 0
+
+                           :tick
+                           (fn [self mw mh]
+                             (let [{:pos pos
+                                    :rotation rot} self
+                                   close (> 1 (dist-sqr
+                                                pos
+                                                (v+
+                                                  (in player :pos)
+                                                  (v* (cam-rot c)
+                                                      0.5))))]
+
+                               (player :pos)
+
+                               (defer (rl-pop-matrix)
+                                 (rl-push-matrix)
+
+                                 (rl-translatef ;pos)
+
+                                 (rl-translatef (* 2.5 0.4) 0 0)
+
+                                 (rl-rotatef rot 0 1 0)
+
+                                 (loop [i :range [0 5]]
+
+                                   (draw-cube-texture
+                                     (in images :bar)
+
+                                     [(* i -0.4) 0 0]
+
+                                     0.1
+                                     2
+                                     0.1
+
+                                     (if (and close
+                                              (self :walls))
+                                       :white
+                                       :gray))))
+
+                               (when (and close
+                                          (self :walls)
+                                          (= :touch (get-in player [:attack-state :kind])))
+                                 (if (get-in player [:inventory :lockpick])
+                                   (do
+                                     (put-in player [:inventory :lockpick] nil)
+
+                                     (flash-text
+                                       ``
+Let's see...
+``
+                                       (/ mw 2)
+                                       (/ mh 1.5)
+                                       24
+                                       :player-says)
+
+                                     (anim
+                                       (loop [_ :range [0 180]]
+                                         (yield nil))
+
+                                       (flash-text
+                                         ``
+Yes!
+``
+                                         (/ mw 2)
+                                         (/ mh 1.5)
+                                         24
+                                         :player-says)
+
+                                       (put self :walls nil)
+
+                                       (loop [i :range [0 60]]
+                                         (print (self :rot))
+                                         (put self :rotation (* 95 (ease-in-out (/ i 59))))
+                                         (yield nil))
+
+                                       (gain-hope player 3)))
+                                   (flash-text
+                                     ``
+It's locked.
+Jeez!
+``
+                                     (/ mw 2)
+                                     (/ mh 1.5)
+                                     24
+                                     :player-says))))
+
+                             #
+)}))
 
            (comment do
                     # cabinet
@@ -2618,14 +2832,17 @@ I'm free!
 
 (put levels :floor0 floor0)
 
-#(init-level :floor-2 :stairs)
-(init-level :floor-1 :cell)
-#(init-level :floor0 :stairs)
+#(init-level :floor-2 :trap-door)
+#(init-level :floor-1 :cell)
+(init-level :floor0 :stairs)
 
+(var wait-for-reload false)
 
 (start-game {:left fullscreen?
              :render (fn [el]
-                       (try
-                         (frame el)
-                         ([err fib]
-                           (debug/stacktrace fib err))))})
+                       (unless wait-for-reload
+                         (try
+                           (frame el)
+                           ([err fib]
+                             (set wait-for-reload true)
+                             (debug/stacktrace fib err)))))})
