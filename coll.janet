@@ -1,4 +1,4 @@
-(import ../freja/freja/vector-math :prefix "")
+(import freja/vector-math :prefix "")
 
 (defn circle-circle?
   [p1 r1
