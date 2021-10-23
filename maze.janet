@@ -3,11 +3,16 @@
 (use freja/defonce)
 (use freja-jaylib)
 
+(var doctor-talks false)
+(var spoken false)
+
 (import freja/vector-math :prefix "")
 (import ./coll :prefix "")
 (import ./exp :as explo)
 
 (import spork/path)
+
+(defonce inited @{})
 
 (defonce saved-levels
   @{})
@@ -107,6 +112,24 @@
   (let [size (math/floor (* render-scale 154))
         w (fj/measure-text "You died" size)]
     (fj/draw-text "You died"
+                  (math/floor (- (/ (* render-scale mw) 2) (/ w 2)))
+                  (math/floor (- (/ (* render-scale mh) 2) (/ size 2)))
+                  size
+                  :black)))
+
+
+(varfn win-screen
+  [mw mh]
+  (draw-rectangle
+    0
+    0
+    2000
+    1000
+    [0 0 1 1])
+
+  (let [size (math/floor (* render-scale 154))
+        w (fj/measure-text "You died" size)]
+    (fj/draw-text "You won!"
                   (math/floor (- (/ (* render-scale mw) 2) (/ w 2)))
                   (math/floor (- (/ (* render-scale mh) 2) (/ size 2)))
                   size
@@ -258,8 +281,11 @@
                  size
                  color))))))
 
-(var c nil)
+(def oc (if (dyn 'c)
+          (tracev (get-in (dyn 'c) [:ref 0]))
+          nil))
 
+(var c oc)
 
 (var map-pos nil)
 (var map-w nil)
@@ -1109,6 +1135,7 @@ The bread is dirty...
         last-state (get-in player [:attack-state :kind])
         input-state (cond
                       (and focused?
+                           (not (player :talking))
                            (mouse-button-pressed? 0))
                       :touch
 
@@ -1207,6 +1234,7 @@ The bread is dirty...
         last-state (get-in player [:attack-state :kind])
         input-state (cond
                       (and focused?
+                           (not (player :talking))
                            (mouse-button-pressed? 0))
                       :throw
 
@@ -1311,10 +1339,12 @@ The bread is dirty...
         last-state (get-in player [:attack-state :kind])
         input-state (cond
                       (and focused?
+                           (not (player :talking))
                            (mouse-button-down? 0))
                       :aim
 
                       (and focused?
+                           (not (player :talking))
                            (mouse-button-released? 0))
                       :shoot
 
@@ -2713,59 +2743,268 @@ Finally, the vial!
 
 (put levels :floor-2 floor-2)
 
+(defn say
+  [t & lines]
+
+  (if (function? t)
+    (do
+      (t)
+      (if-not (empty? lines)
+        (say ;lines)
+        (anim
+          (loop [_ :range [0 60]]
+            (yield nil))
+          (put player :talking false))))
+
+    (anim
+      (var next false)
+
+      (let [size 24
+            w (fj/measure-text t size)
+            nof-newlines (length (string/find-all "\n" t))
+            x (- (/ render-width 2) (/ w 2))
+            y (- (/ render-height 2) (/ size 2))
+
+            newline-delay 5
+            space-delay 0
+            duration (max 180 (* (length t) 5))]
+
+        (put player :talking true)
+        (set doctor-talks true)
+
+        (var index 0)
+        (var delay 0)
+        (var delay-pos nil)
+
+        (while (not next)
+          (if (pos? delay)
+            (-- delay)
+            (do
+              (set delay 0.7)
+              (++ index)))
+
+          (def t-to-show
+            (if (< index (length t))
+              (string/slice t 0 index)
+              (do
+                (set doctor-talks false)
+                t)))
+
+          (when (and (not= delay-pos index)
+                     (= (chr "\n") (last t-to-show)))
+            (set delay-pos index)
+            (set delay newline-delay))
+
+          (when (and (not= delay-pos index)
+                     (= (chr " ") (last t-to-show)))
+            (set delay-pos index)
+            (set delay space-delay))
+
+          (draw-rectangle
+            (math/floor (- x 12))
+            (math/floor (- y 12))
+            (+ 24 w)
+            (+ 24 (* (inc nof-newlines) (+ 8 size)))
+            [0 0 0 1])
+
+          (yield
+            (fj/draw-text
+              t-to-show
+              (math/floor x)
+              (math/floor y)
+              size
+              :white))
+
+          (when (mouse-button-pressed? 0)
+            (if (< index (length t))
+              (set index (length t))
+              (do
+                (set next true)
+                (set doctor-talks false))))))
+
+      (if-not (empty? lines)
+        (say ;lines)
+        (anim
+          (loop [_ :range [0 60]]
+            (yield nil))
+          (put player :talking false))))))
+
 
 (defn converse
   [talker convo]
 
-  (anim
-    (var next false)
+  (print "start talk 12")
 
-    (let [t ``
-Hello?
+  (case convo
+    :has-vial
+    (say ``
+You got the vial?
 ``
-          size 24
-          w (fj/measure-text t size)
-          nof-newlines (length (string/find-all "\n" t))]
 
-      (while (not next)
+         ``
+Great! I'll get something cooked up straight away.
+``
 
-        (when (mouse-button-pressed? 0)
-          (set next true))
+         ``
+I will restore the hope of the people here.
+``
 
-        (yield
-          (fj/draw-text
-            t
-            (math/floor (- (/ render-width 2) (/ w 2)))
-            (math/floor (- (/ render-height 2) (/ size 2)))
-            size
-            :white))))
+         ``
+Rest for now, I'm sure you're tired.
+``
 
-    (var next false)
+         ``
+Tomorrow we'll talk to the Todd and Caitlyn.
+Hopefully they'll appreciate what you've done for us.
+``
 
-    (let [t ``
+         (fn []
+
+           (do
+             (put player :dead true)
+             (put player :invul 9999999999)
+
+             (anim
+               (let [dur 10]
+                 (loop [f :range [0 dur]
+                        :let [p (/ f (dec dur))
+                              p (ease-out-expo p)]]
+                   (yield (draw-rectangle
+                            0
+                            0
+                            2000
+                            1000
+                            [0 0 1 p])))
+
+                 (forever
+                   (win-screen render-width render-height)
+                   (yield :ok)))))))
+
+    :doctor-short
+    (say ``
+Down the stairs, then to your right. Down the next set of stairs.
+``
+
+         ``
+Find my vial.
+``)
+
+    :doctor
+    (say ``
+Who are you?
+``
+
+         ``
+Oh, you are the prisoner?
+``
+
+         ``
+Or I guess I should call you the escapee.
+``
+
+         ``
+Hmm, should I tell the guards?
+``
+
+         ``
+No? Well, then you will have to make yourself useful.
+``
+
+         ``
+People here have lost hope...
+Ever since the rats started increasing in numbers.
+``
+
+         ``
+I won't bore you with the details.
+What you need to know is that we need medicine.
+``
+
+         ``
+I have the materials necessary, but I'm missing a vial needed to prepare the medicine.
+``
+
+         ``
+Go down the stairs again, and to your right, there's a locked gate.
+``
+
+         ``
+Here, take this lockpick, and go find my vial for me.
+``
+
+         ``
+Unless you prefer I'd rat you out to the guards.
+``
+
+         (fn []
+           (put-in player [:inventory :lockpick] true))))
+
+  (comment
+    (anim
+      (var next false)
+
+      (let [t ``
+Hello? Who are you?
+``
+            size 24
+            w (fj/measure-text t size)
+            nof-newlines (length (string/find-all "\n" t))
+            x (- (/ render-width 2) (/ w 2))
+            y (- (/ render-height 2) (/ size 2))]
+
+        (while (not next)
+
+          (put player :talking true)
+
+          (when (mouse-button-pressed? 0)
+            (set next true))
+
+          (draw-rectangle
+            (math/floor (- x 12))
+            (math/floor (- y 12))
+            (+ 24 w)
+            (+ 24 (* (inc nof-newlines) (+ 8 size)))
+            [0 0 0 1])
+
+          (yield
+            (fj/draw-text
+              t
+              (math/floor x)
+              (math/floor y)
+              size
+              :white)))
+
+        (set next false)
+
+        (let [t ``
 Hi! Here's a lockpick. Please fetch my vial.
 ``
-          size 24
-          w (fj/measure-text t size)
-          nof-newlines (length (string/find-all "\n" t))]
+              size 24
+              w (fj/measure-text t size)
+              nof-newlines (length (string/find-all "\n" t))]
 
-      (put-in player [:inventory :lockpick] true)
+          (put-in player [:inventory :lockpick] true)
 
-      (while (not next)
+          (while (not next)
 
-        (when (mouse-button-pressed? 0)
-          (set next true))
+            (when (mouse-button-pressed? 0)
+              (set next true))
 
-        (yield
-          (fj/draw-text
-            t
-            (math/floor (- (/ render-width 2) (/ w 2)))
-            (math/floor (- (/ render-height 2) (/ size 2)))
-            size
-            :white)))))
+            (yield
+              (fj/draw-text
+                t
+                (math/floor (- (/ render-width 2) (/ w 2)))
+                (math/floor (- (/ render-height 2) (/ size 2)))
+                size
+                :white))
 
-  #
-)
+            (anim
+              (loop [_ :range [0 30]]
+                (yield nil))
+              (put player :talking false))))))
+
+    #
+))
 
 
 (defn init-floor0
@@ -2773,7 +3012,6 @@ Hi! Here's a lockpick. Please fetch my vial.
   (print "inited floor0")
 
   # doctor
-
 
   (array/push
     notes
@@ -2800,11 +3038,16 @@ I'm free!
                                        0.5))))
 
                     _ (when (neg? timer)
-                        (put note :timer 5))
+                        (put note :timer 20))
 
                     tex
+                    (cond
+                      doctor-talks
+                      (if (< timer 10)
+                        (images :doctor-open-mouth)
+                        (images :doctor))
 
-                    (if close
+                      close
                       (images :doctor-open-mouth)
                       (images :doctor))]
 
@@ -2820,7 +3063,14 @@ I'm free!
 
                 (when (and close
                            (= :touch (get-in player [:attack-state :kind])))
-                  (converse self :doctor)
+                  (cond
+                    (get-in player [:inventory :vial])
+                    (converse self :has-vial)
+
+                    spoken
+                    (converse self :doctor-short)
+                    (do (set spoken true)
+                      (converse self :doctor)))
                   #
 )))})
 
@@ -2906,17 +3156,6 @@ I'm free!
 
 (var wait-for-reload false)
 
-(comment
-  (start-game {:left fullscreen?
-               :render (fn [el]
-                         (unless wait-for-reload
-                           (try
-                             (frame el)
-                             ([err fib]
-                               (set wait-for-reload true)
-                               (debug/stacktrace fib err)))))})
-  #
-)
 
 (defn init
   []
@@ -3023,12 +3262,33 @@ I'm free!
   #(init-level :floor-2 :stairs)
   (init-level :floor-1 :cell)
   #(init-level :floor0 :stairs)
+  #
 )
 
+(comment
+  (unless (inited :inited)
+    (print "initing")
+
+    (explo/init)
+    (init)
+    (put inited :inited true))
+
+  (start-game {:left fullscreen?
+               :render (fn [el]
+                         (unless wait-for-reload
+                           (try
+                             (frame el)
+                             ([err fib]
+                               (set wait-for-reload true)
+                               (debug/stacktrace fib err)))))})
+  #
+)
 
 (defn main
   [& _]
-  (init-window 800 600 "Rats")
+  (init-window 0 0 "Rats")
+
+  (toggle-fullscreen)
 
   (explo/init)
   (init)
