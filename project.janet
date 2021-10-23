@@ -5,7 +5,9 @@
 
                  ## using my own fork due to additions to jaylib
                  "https://github.com/saikyun/freja-jaylib"
-])
+
+                 # for vector math
+                 "https://github.com/saikyun/freja"])
 
 (declare-executable
   :name "rats"

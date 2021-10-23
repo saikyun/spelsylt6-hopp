@@ -3,7 +3,6 @@
 (use freja/defonce)
 (use freja-jaylib)
 
-
 (import ../freja/freja/vector-math :prefix "")
 (import ./coll :prefix "")
 (import ./exp :as explo)
