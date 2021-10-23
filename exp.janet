@@ -1,4 +1,5 @@
-(use freja/flow)
+#(use freja/flow)
+(use freja-jaylib)
 
 (defn ->c
   [[r g b a]]
@@ -18,7 +19,7 @@
 
 (def rt-size 100)
 
-(def rt (load-render-texture rt-size rt-size))
+(var rt nil)
 
 (def explo123
   (seq [i :range [0 20]
@@ -236,4 +237,9 @@
     (* shine progress progress 30)
     (->c [244 245 237 visibility])))
 
-(start-game {:render (fn [el] (frame explo123))})
+(defn init
+  []
+  (set rt (load-render-texture rt-size rt-size)))
+
+#(start-game {:render (fn [el] (frame explo123))})
+
